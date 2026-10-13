@@ -1,0 +1,135 @@
+{
+  "$schema": "./shared/config.schema.json",
+  "rules": [
+    {
+      "name": "dev-ca",
+      "enabled": true,
+      "mode": "ca_scanner",
+      "accounts": [
+        "YOUR_ACCOUNT"
+      ],
+      "token": {
+        "amountSol": 0.01
+      }
+    },
+    {
+      "name": "kol-quotes-launch",
+      "enabled": false,
+      "mode": "engagement",
+      "reactor": "YOUR_KOL",
+      "reactedTo": [
+        "YOUR_DEV"
+      ],
+      "actions": [
+        "quote",
+        "reply",
+        "retweet"
+      ],
+      "excludeKeywords": {
+        "words": [
+          "scam",
+          "rug"
+        ],
+        "scanDepth": 1
+      },
+      "useDetectedCa": true,
+      "token": {
+        "amountSol": 0.01
+      }
+    },
+    {
+      "name": "keyword-post",
+      "enabled": false,
+      "mode": "new_tweet",
+      "accounts": [
+        "YOUR_ACCOUNT"
+      ],
+      "events": [
+        "post"
+      ],
+      "includeKeywords": {
+        "words": [
+          "dog"
+        ],
+        "scanDepth": 0
+      },
+      "token": {
+        "mint": "",
+        "amountSol": 0.01
+      }
+    },
+    {
+      "name": "follow-bio",
+      "enabled": false,
+      "mode": "follow",
+      "accounts": [
+        "YOUR_ACCOUNT"
+      ],
+      "followEvents": [
+        "follow"
+      ],
+      "useDetectedCa": true,
+      "token": {
+        "amountSol": 0.01
+      }
+    },
+    {
+      "name": "pfp-change",
+      "enabled": false,
+      "mode": "pfp_update",
+      "accounts": [
+        "YOUR_ACCOUNT"
+      ],
+      "fields": [
+        "avatar"
+      ],
+      "token": {
+        "mint": "",
+        "amountSol": 0.01
+      }
+    },
+    {
+      "name": "pump-callouts",
+      "enabled": false,
+      "mode": "callout",
+      "callers": [
+        "YOUR_CALLER"
+      ],
+      "calloutKinds": [
+        "callout"
+      ],
+      "maxMultiple": 2,
+      "token": {
+        "amountSol": 0.01
+      },
+      "filters": {
+        "maxMarketCapUsd": 250000
+      }
+    },
+    {
+      "name": "fomo-theses",
+      "enabled": false,
+      "mode": "fomo",
+      "fomoUsers": [
+        "YOUR_FOMO_USER"
+      ],
+      "fomoEvents": [
+        "thesis"
+      ],
+      "excludeKeywords": {
+        "words": [
+          "exit"
+        ],
+        "scanDepth": 0
+      },
+      "token": {
+        "amountSol": 0.01
+      }
+    }
+  ],
+  "spend": {
+    "maxPerTradeSol": 0.05,
+    "maxPerHourSol": 0.2,
+    "maxTotalSol": 0.5
+  }
+}
