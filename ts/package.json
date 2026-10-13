@@ -1,0 +1,48 @@
+{
+  "name": "solana-sniper-bot",
+  "version": "0.1.0",
+  "description": "Solana sniper bot for X/Twitter signals: buys Solana and pump.fun tokens when a watched X account posts a contract address, changes its bio, follows someone, or gets a pump.fun callout or FOMO thesis. Runs on the TweetStream real-time feed.",
+  "keywords": [
+    "solana",
+    "sniper-bot",
+    "pump-fun",
+    "memecoin",
+    "twitter",
+    "x",
+    "websocket",
+    "trading-bot"
+  ],
+  "homepage": "https://tweetstream.io/?utm_source=github&utm_medium=referral&utm_campaign=solana-sniper-bot",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tweetstream-io/solana-sniper-bot.git",
+    "directory": "ts"
+  },
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "demo": "node scripts/demo.ts",
+    "demo:feed": "node scripts/demo-feed.ts",
+    "latency:probe": "node scripts/latency-probe.ts",
+    "bench": "node scripts/bench.ts",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "docs:config": "node scripts/config-docs.ts"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "ajv": "^8.20.0",
+    "bs58": "^6.0.0",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "@types/ws": "^8.18.2",
+    "typescript": "^5.9.3"
+  }
+}
