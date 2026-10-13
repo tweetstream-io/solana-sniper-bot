@@ -1,0 +1,164 @@
+{
+  "name": "limits",
+  "description": "Limits: maxSnipes stops a rule after its first trade, posts older than maxSignalAgeMs are skipped, and cooldownSec spaces out trades.",
+  "config": {
+    "rules": [
+      {
+        "name": "once",
+        "mode": "ca_scanner",
+        "accounts": [
+          "111"
+        ]
+      },
+      {
+        "name": "cool",
+        "mode": "ca_scanner",
+        "accounts": [
+          "222"
+        ],
+        "filters": {
+          "maxSnipes": 0,
+          "cooldownSec": 60
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000001100,
+        "d": {
+          "tweetId": "2026541002650550272",
+          "text": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+          "createdAt": 1772000001000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000002100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000002100,
+        "d": {
+          "tweetId": "2026541006844854272",
+          "text": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+          "createdAt": 1772000002000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000009000,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000009000,
+        "d": {
+          "tweetId": "2026541011039158272",
+          "text": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+          "createdAt": 1772000003000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000004100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000004100,
+        "d": {
+          "tweetId": "2026541015233462272",
+          "text": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
+          "createdAt": 1772000004000,
+          "kind": "post",
+          "author": {
+            "id": "222",
+            "handle": "@kol_two"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000005100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000005100,
+        "d": {
+          "tweetId": "2026541019427766272",
+          "text": "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd",
+          "createdAt": 1772000005000,
+          "kind": "post",
+          "author": {
+            "id": "222",
+            "handle": "@kol_two"
+          }
+        }
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "tweet/content twitter:2026541002650550272",
+      "rule": "once",
+      "decision": "fire",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "action": "buy",
+      "source": "text"
+    },
+    {
+      "event": "tweet/content twitter:2026541006844854272",
+      "rule": "once",
+      "decision": "skip",
+      "code": "max_snipes"
+    },
+    {
+      "event": "tweet/content twitter:2026541011039158272",
+      "rule": "once",
+      "decision": "skip",
+      "code": "stale_post"
+    },
+    {
+      "event": "tweet/content twitter:2026541015233462272",
+      "rule": "cool",
+      "decision": "fire",
+      "mint": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
+      "action": "buy",
+      "source": "text"
+    },
+    {
+      "event": "tweet/content twitter:2026541019427766272",
+      "rule": "cool",
+      "decision": "skip",
+      "code": "cooldown"
+    }
+  ]
+}

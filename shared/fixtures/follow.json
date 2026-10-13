@@ -1,0 +1,189 @@
+{
+  "name": "follow",
+  "description": "Follow and unfollow: CA from the followed account's bio, a payload without a bio, a target filter, an unfollow that sells, and a duplicate event.",
+  "config": {
+    "rules": [
+      {
+        "name": "bio-ca",
+        "mode": "follow",
+        "accounts": [
+          "111"
+        ],
+        "useDetectedCa": true
+      },
+      {
+        "name": "unfollow-sell",
+        "mode": "follow",
+        "accounts": [
+          "111"
+        ],
+        "followEvents": [
+          "unfollow"
+        ],
+        "token": {
+          "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+          "action": "sell"
+        }
+      },
+      {
+        "name": "targeted",
+        "mode": "follow",
+        "accounts": [
+          "111"
+        ],
+        "targets": [
+          "@special"
+        ],
+        "token": {
+          "mint": "jqwr76eubixztvn3ka2NW4Ewxb5JZs8skn1ju1oa4Qm"
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "follow",
+        "ts": 1772000001000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "target": {
+            "id": "500",
+            "handle": "@launchpad",
+            "bio": "token 3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd"
+          },
+          "eventId": "f-1",
+          "kind": "FOLLOW",
+          "observedAt": 1772000001000
+        },
+        "id": "f-1"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "follow",
+        "ts": 1772000001000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "target": {
+            "id": "501",
+            "handle": "@special"
+          },
+          "eventId": "f-2",
+          "kind": "FOLLOW",
+          "observedAt": 1772000001000
+        },
+        "id": "f-2"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "unfollow",
+        "ts": 1772000001000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "target": {
+            "id": "500",
+            "handle": "@launchpad"
+          },
+          "eventId": "f-3",
+          "kind": "UNFOLLOW",
+          "observedAt": 1772000001000
+        },
+        "id": "f-3"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "follow",
+        "ts": 1772000001000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "target": {
+            "id": "500",
+            "handle": "@launchpad",
+            "bio": "token 3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd"
+          },
+          "eventId": "f-1",
+          "kind": "FOLLOW",
+          "observedAt": 1772000001000
+        },
+        "id": "f-1"
+      }
+    }
+  ],
+  "expectedSignals": [
+    {
+      "event": "account/follow f-1",
+      "source": "follow_bio",
+      "chain": "solana",
+      "mint": "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd",
+      "confidence": "medium",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "account/follow f-1",
+      "rule": "bio-ca",
+      "decision": "fire",
+      "mint": "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd",
+      "action": "buy",
+      "source": "follow_bio"
+    },
+    {
+      "event": "account/follow f-2",
+      "rule": "targeted",
+      "decision": "fire",
+      "mint": "jqwr76eubixztvn3ka2NW4Ewxb5JZs8skn1ju1oa4Qm",
+      "action": "buy",
+      "source": null
+    },
+    {
+      "event": "account/follow f-2",
+      "rule": "bio-ca",
+      "decision": "skip",
+      "code": "bio_not_in_payload"
+    },
+    {
+      "event": "account/unfollow f-3",
+      "rule": "unfollow-sell",
+      "decision": "fire",
+      "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+      "action": "sell",
+      "source": null
+    }
+  ]
+}

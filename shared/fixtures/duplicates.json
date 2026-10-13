@@ -1,0 +1,152 @@
+{
+  "name": "duplicates",
+  "description": "The same event on the Ultra and the standard connection: the first copy is processed, the second is dropped before detection.",
+  "config": {
+    "rules": [
+      {
+        "name": "scan",
+        "mode": "ca_scanner",
+        "accounts": [
+          "111"
+        ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000001050,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000001050,
+        "d": {
+          "tweetId": "2026541002650550272",
+          "text": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+          "createdAt": 1772000001000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001053,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000001050,
+        "d": {
+          "tweetId": "2026541002650550272",
+          "text": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+          "createdAt": 1772000001000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000001400,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "meta",
+        "ts": 1772000001400,
+        "d": {
+          "tweetId": "2026541002650550272",
+          "platform": "twitter",
+          "ocr": {
+            "text": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29"
+          }
+        },
+        "id": "meta-1"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001402,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "meta",
+        "ts": 1772000001400,
+        "d": {
+          "tweetId": "2026541002650550272",
+          "platform": "twitter",
+          "ocr": {
+            "text": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29"
+          }
+        },
+        "id": "meta-1"
+      }
+    }
+  ],
+  "expectedSignals": [
+    {
+      "event": "tweet/content twitter:2026541002650550272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/meta twitter:2026541002650550272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/meta twitter:2026541002650550272",
+      "source": "ocr",
+      "chain": "solana",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "confidence": "medium",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "tweet/content twitter:2026541002650550272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "action": "buy",
+      "source": "text"
+    },
+    {
+      "event": "tweet/meta twitter:2026541002650550272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "action": "buy",
+      "source": "ocr"
+    }
+  ]
+}

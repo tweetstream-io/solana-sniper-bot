@@ -1,0 +1,206 @@
+{
+  "name": "profile-ca",
+  "description": "CA scanner on profile changes: only addresses new compared with the previous value fire; without a previous value the signal has low confidence.",
+  "config": {
+    "rules": [
+      {
+        "name": "profile",
+        "mode": "ca_scanner",
+        "accounts": [
+          "111"
+        ],
+        "sources": [
+          "profile"
+        ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": 1772000001000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "changes": {
+            "bio": "Token: FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA"
+          },
+          "eventId": "p-1",
+          "kind": "PROFILE",
+          "observedAt": 1772000001000,
+          "previous": {
+            "bio": "Builder"
+          }
+        },
+        "id": "p-1"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": 1772000001000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "changes": {
+            "bio": "Token: FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA and H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29"
+          },
+          "eventId": "p-2",
+          "kind": "PROFILE",
+          "observedAt": 1772000001000,
+          "previous": {
+            "bio": "Token: FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA"
+          }
+        },
+        "id": "p-2"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": 1772000001000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "changes": {
+            "websiteUrl": "https://pump.fun/coin/7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN"
+          },
+          "eventId": "p-3",
+          "kind": "PROFILE",
+          "observedAt": 1772000001000,
+          "previous": {
+            "websiteUrl": null
+          }
+        },
+        "id": "p-3"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": 1772000001000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "changes": {
+            "name": "dev $GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo"
+          },
+          "eventId": "p-4",
+          "kind": "PROFILE",
+          "observedAt": 1772000001000
+        },
+        "id": "p-4"
+      }
+    }
+  ],
+  "expectedSignals": [
+    {
+      "event": "account/profile_update p-1",
+      "source": "profile",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "account/profile_update p-2",
+      "source": "profile",
+      "chain": "solana",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "account/profile_update p-3",
+      "source": "profile",
+      "chain": "solana",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "account/profile_update p-4",
+      "source": "profile",
+      "chain": "solana",
+      "mint": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
+      "confidence": "low",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "account/profile_update p-1",
+      "rule": "profile",
+      "decision": "fire",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "action": "buy",
+      "source": "profile"
+    },
+    {
+      "event": "account/profile_update p-2",
+      "rule": "profile",
+      "decision": "fire",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "action": "buy",
+      "source": "profile"
+    },
+    {
+      "event": "account/profile_update p-3",
+      "rule": "profile",
+      "decision": "fire",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "action": "buy",
+      "source": "profile"
+    },
+    {
+      "event": "account/profile_update p-4",
+      "rule": "profile",
+      "decision": "skip",
+      "code": "low_confidence"
+    }
+  ]
+}

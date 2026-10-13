@@ -1,0 +1,376 @@
+{
+  "name": "callout",
+  "description": "pump.fun callouts: a new call fires, a high multiple and a missing caller position skip, other kinds are ignored, updates never buy, a caller exit sells, EVM tokens are not traded.",
+  "config": {
+    "rules": [
+      {
+        "name": "caller",
+        "mode": "callout",
+        "callers": [
+          "CallerOne"
+        ],
+        "maxMultiple": 3,
+        "sellWhenCallerExits": true
+      },
+      {
+        "name": "holder",
+        "mode": "callout",
+        "callers": [
+          "CallerTwo"
+        ],
+        "requireCallerPosition": true
+      }
+    ]
+  },
+  "positions": [
+    {
+      "mint": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2",
+      "rule": "caller"
+    }
+  ],
+  "events": [
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "pump_fun",
+          "caller": {
+            "username": "CallerOne"
+          },
+          "kind": "callout",
+          "token": {
+            "address": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+            "chainId": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+          },
+          "calloutId": "call-c-1",
+          "createdAt": 1772000001000,
+          "multiple": 1.5
+        },
+        "id": "c-1"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "pump_fun",
+          "caller": {
+            "username": "CallerOne"
+          },
+          "kind": "callout",
+          "token": {
+            "address": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+            "chainId": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+          },
+          "calloutId": "call-c-2",
+          "createdAt": 1772000001000,
+          "multiple": 4.2
+        },
+        "id": "c-2"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "pump_fun",
+          "caller": {
+            "username": "CallerOne"
+          },
+          "kind": "reply",
+          "token": {
+            "address": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN"
+          },
+          "calloutId": "call-c-3",
+          "createdAt": 1772000001000,
+          "replyId": "r-1"
+        },
+        "id": "c-3"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout_update",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "pump_fun",
+          "caller": {
+            "username": "CallerOne"
+          },
+          "kind": "callout",
+          "token": {
+            "address": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA"
+          },
+          "calloutId": "call-cu-1",
+          "createdAt": 1772000001000,
+          "updateOf": "c-1"
+        },
+        "id": "cu-1"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "pump_fun",
+          "caller": {
+            "username": "CallerTwo"
+          },
+          "kind": "callout",
+          "token": {
+            "address": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo"
+          },
+          "calloutId": "call-c-4",
+          "createdAt": 1772000001000
+        },
+        "id": "c-4"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "pump_fun",
+          "caller": {
+            "username": "CallerTwo"
+          },
+          "kind": "callout",
+          "token": {
+            "address": "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd"
+          },
+          "calloutId": "call-c-5",
+          "createdAt": 1772000001000,
+          "position": {
+            "amountHeld": "1200.5"
+          }
+        },
+        "id": "c-5"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout_update",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "pump_fun",
+          "caller": {
+            "username": "CallerOne"
+          },
+          "kind": "callout",
+          "token": {
+            "address": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2"
+          },
+          "calloutId": "call-cu-2",
+          "createdAt": 1772000001000,
+          "position": {
+            "amountHeld": "0"
+          },
+          "updateOf": "c-0"
+        },
+        "id": "cu-2"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "pump_fun",
+          "caller": {
+            "username": "CallerOne"
+          },
+          "kind": "callout",
+          "token": {
+            "address": "0x52908400098527886e0f7030069857d2e4169ee7",
+            "chainId": "eip155:56"
+          },
+          "calloutId": "call-c-6",
+          "createdAt": 1772000001000
+        },
+        "id": "c-6"
+      }
+    }
+  ],
+  "expectedSignals": [
+    {
+      "event": "account/callout c-1",
+      "source": "callout",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "pump_fun",
+        "handle": "CallerOne"
+      }
+    },
+    {
+      "event": "account/callout c-2",
+      "source": "callout",
+      "chain": "solana",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "confidence": "high",
+      "actor": {
+        "namespace": "pump_fun",
+        "handle": "CallerOne"
+      }
+    },
+    {
+      "event": "account/callout c-3",
+      "source": "callout",
+      "chain": "solana",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "confidence": "high",
+      "actor": {
+        "namespace": "pump_fun",
+        "handle": "CallerOne"
+      }
+    },
+    {
+      "event": "account/callout_update cu-1",
+      "source": "callout",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "pump_fun",
+        "handle": "CallerOne"
+      }
+    },
+    {
+      "event": "account/callout c-4",
+      "source": "callout",
+      "chain": "solana",
+      "mint": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
+      "confidence": "high",
+      "actor": {
+        "namespace": "pump_fun",
+        "handle": "CallerTwo"
+      }
+    },
+    {
+      "event": "account/callout c-5",
+      "source": "callout",
+      "chain": "solana",
+      "mint": "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd",
+      "confidence": "high",
+      "actor": {
+        "namespace": "pump_fun",
+        "handle": "CallerTwo"
+      }
+    },
+    {
+      "event": "account/callout_update cu-2",
+      "source": "callout",
+      "chain": "solana",
+      "mint": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2",
+      "confidence": "high",
+      "actor": {
+        "namespace": "pump_fun",
+        "handle": "CallerOne"
+      }
+    },
+    {
+      "event": "account/callout c-6",
+      "source": "callout",
+      "chain": "evm",
+      "mint": "0x52908400098527886e0f7030069857d2e4169ee7",
+      "confidence": "high",
+      "actor": {
+        "namespace": "pump_fun",
+        "handle": "CallerOne"
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "account/callout c-1",
+      "rule": "caller",
+      "decision": "fire",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "action": "buy",
+      "source": "callout"
+    },
+    {
+      "event": "account/callout c-2",
+      "rule": "caller",
+      "decision": "skip",
+      "code": "multiple_too_high"
+    },
+    {
+      "event": "account/callout_update cu-1",
+      "rule": "caller",
+      "decision": "skip",
+      "code": "update_not_new"
+    },
+    {
+      "event": "account/callout c-4",
+      "rule": "holder",
+      "decision": "skip",
+      "code": "caller_not_holding"
+    },
+    {
+      "event": "account/callout c-5",
+      "rule": "holder",
+      "decision": "fire",
+      "mint": "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd",
+      "action": "buy",
+      "source": "callout"
+    },
+    {
+      "event": "account/callout_update cu-2",
+      "rule": "caller",
+      "decision": "skip",
+      "code": "update_not_new"
+    },
+    {
+      "event": "account/callout_update cu-2",
+      "rule": "caller",
+      "decision": "exit",
+      "mint": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2",
+      "code": "caller_exited"
+    },
+    {
+      "event": "account/callout c-6",
+      "rule": "caller",
+      "decision": "skip",
+      "code": "evm_not_supported"
+    }
+  ]
+}

@@ -1,0 +1,235 @@
+{
+  "name": "addresses",
+  "description": "Contract address extraction: 32-byte base58 decode, punctuation, denylist, glued text, EVM, token links, one signal per mint per event.",
+  "config": {
+    "rules": [
+      {
+        "name": "scan",
+        "mode": "ca_scanner",
+        "accounts": [
+          "111"
+        ],
+        "minConfidence": "low"
+      }
+    ]
+  },
+  "events": [
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000001100,
+        "d": {
+          "tweetId": "2026541002650550272",
+          "text": "CA: FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA.",
+          "createdAt": 1772000001000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000002100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000002100,
+        "d": {
+          "tweetId": "2026541006844854272",
+          "text": "broken 0OIlFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA and 4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofL and bTdjzaWCb6UY9AZqTMMbPSc3VzHeVR9By6ueiqrY2uVY",
+          "createdAt": 1772000002000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000003100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000003100,
+        "d": {
+          "tweetId": "2026541011039158272",
+          "text": "not tokens: So11111111111111111111111111111111111111112 11111111111111111111111111111111",
+          "createdAt": 1772000003000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000004100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000004100,
+        "d": {
+          "tweetId": "2026541015233462272",
+          "text": "glued xH6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29 and $7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN, plus 0x52908400098527886e0f7030069857d2e4169ee7",
+          "createdAt": 1772000004000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000005100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000005100,
+        "d": {
+          "tweetId": "2026541019427766272",
+          "text": "links",
+          "createdAt": 1772000005000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "urls": [
+            {
+              "url": "https://pump.fun/coin/GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo"
+            },
+            {
+              "url": "https://birdeye.so/token/3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd"
+            },
+            {
+              "url": "https://dexscreener.com/solana/HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000006100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000006100,
+        "d": {
+          "tweetId": "2026541023622070272",
+          "text": "same mint twice https://pump.fun/coin/FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk and FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
+          "createdAt": 1772000006000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    }
+  ],
+  "expectedSignals": [
+    {
+      "event": "tweet/content twitter:2026541002650550272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/content twitter:2026541015233462272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/content twitter:2026541015233462272",
+      "source": "text",
+      "chain": "evm",
+      "mint": "0x52908400098527886e0f7030069857d2e4169ee7",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/content twitter:2026541019427766272",
+      "source": "url",
+      "chain": "solana",
+      "mint": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/content twitter:2026541019427766272",
+      "source": "url",
+      "chain": "solana",
+      "mint": "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/content twitter:2026541019427766272",
+      "source": "url",
+      "chain": "solana",
+      "mint": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2",
+      "confidence": "low",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/content twitter:2026541023622070272",
+      "source": "url",
+      "chain": "solana",
+      "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    }
+  ]
+}

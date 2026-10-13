@@ -1,0 +1,156 @@
+{
+  "name": "pfp-update",
+  "description": "PFP update: avatar changes fire, other fields fire only when selected, and an unchanged value fires nothing.",
+  "config": {
+    "rules": [
+      {
+        "name": "avatar",
+        "mode": "pfp_update",
+        "accounts": [
+          "111"
+        ],
+        "fields": [
+          "avatar"
+        ],
+        "token": {
+          "mint": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2"
+        }
+      },
+      {
+        "name": "banner-or-name",
+        "mode": "pfp_update",
+        "accounts": [
+          "111"
+        ],
+        "fields": [
+          "banner",
+          "name"
+        ],
+        "token": {
+          "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk"
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": 1772000001000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "changes": {
+            "avatar": "https://example.com/new.png"
+          },
+          "eventId": "p-1",
+          "kind": "PROFILE",
+          "observedAt": 1772000001000,
+          "previous": {
+            "avatar": "https://example.com/old.png"
+          }
+        },
+        "id": "p-1"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": 1772000001000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "changes": {
+            "name": "Dev One"
+          },
+          "eventId": "p-2",
+          "kind": "PROFILE",
+          "observedAt": 1772000001000,
+          "previous": {
+            "name": "dev"
+          }
+        },
+        "id": "p-2"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": 1772000001000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "changes": {
+            "bio": "x"
+          },
+          "eventId": "p-3",
+          "kind": "PROFILE",
+          "observedAt": 1772000001000
+        },
+        "id": "p-3"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": 1772000001000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "changes": {
+            "avatar": "https://example.com/same.png"
+          },
+          "eventId": "p-4",
+          "kind": "PROFILE",
+          "observedAt": 1772000001000,
+          "previous": {
+            "avatar": "https://example.com/same.png"
+          }
+        },
+        "id": "p-4"
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "account/profile_update p-1",
+      "rule": "avatar",
+      "decision": "fire",
+      "mint": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2",
+      "action": "buy",
+      "source": null
+    },
+    {
+      "event": "account/profile_update p-2",
+      "rule": "banner-or-name",
+      "decision": "fire",
+      "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
+      "action": "buy",
+      "source": null
+    }
+  ]
+}

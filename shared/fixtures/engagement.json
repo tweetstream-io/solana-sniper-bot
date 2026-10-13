@@ -1,0 +1,221 @@
+{
+  "name": "engagement",
+  "description": "Engagement: target post id match, reactedTo match, action filter, and exclude keywords at scan depth 0 and 1.",
+  "config": {
+    "rules": [
+      {
+        "name": "target-id",
+        "mode": "engagement",
+        "reactor": "222",
+        "targetTweetId": "2026540998456246272",
+        "token": {
+          "mint": "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3"
+        }
+      },
+      {
+        "name": "reacted-to",
+        "mode": "engagement",
+        "reactor": "222",
+        "reactedTo": [
+          "dev_one"
+        ],
+        "actions": [
+          "retweet"
+        ],
+        "token": {
+          "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19"
+        }
+      },
+      {
+        "name": "depth0",
+        "mode": "engagement",
+        "reactor": "222",
+        "reactedTo": [
+          "dev_one"
+        ],
+        "actions": [
+          "quote"
+        ],
+        "excludeKeywords": {
+          "words": [
+            "rug"
+          ],
+          "scanDepth": 0
+        },
+        "token": {
+          "mint": "jqwr76eubixztvn3ka2NW4Ewxb5JZs8skn1ju1oa4Qm"
+        }
+      },
+      {
+        "name": "depth1",
+        "mode": "engagement",
+        "reactor": "222",
+        "reactedTo": [
+          "dev_one"
+        ],
+        "actions": [
+          "quote"
+        ],
+        "excludeKeywords": {
+          "words": [
+            "rug"
+          ],
+          "scanDepth": 1
+        },
+        "token": {
+          "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk"
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000003100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000003100,
+        "d": {
+          "tweetId": "2026541011039158272",
+          "text": "nice",
+          "createdAt": 1772000003000,
+          "kind": "quote",
+          "author": {
+            "id": "222",
+            "handle": "@kol_two"
+          },
+          "ref": {
+            "type": "quote",
+            "tweetId": "2026540998456246272",
+            "author": {
+              "id": "111",
+              "handle": "@dev_one"
+            },
+            "text": "no rug here"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000004100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000004100,
+        "d": {
+          "tweetId": "2026541015233462272",
+          "text": "agreed",
+          "createdAt": 1772000004000,
+          "kind": "reply",
+          "author": {
+            "id": "222",
+            "handle": "@kol_two"
+          },
+          "ref": {
+            "type": "reply",
+            "tweetId": "2026541002650550272",
+            "author": {
+              "id": "999",
+              "handle": "@someone"
+            },
+            "text": "hello"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000005100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000005100,
+        "d": {
+          "tweetId": "2026541019427766272",
+          "text": "RT @dev_one: gm",
+          "createdAt": 1772000005000,
+          "kind": "retweet",
+          "author": {
+            "id": "222",
+            "handle": "@kol_two"
+          },
+          "ref": {
+            "type": "retweet",
+            "tweetId": "2026541006844854272",
+            "author": {
+              "id": "111",
+              "handle": "@dev_one"
+            },
+            "text": "gm"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000006100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000006100,
+        "d": {
+          "tweetId": "2026541023622070272",
+          "text": "me too",
+          "createdAt": 1772000006000,
+          "kind": "quote",
+          "author": {
+            "id": "999",
+            "handle": "@someone"
+          },
+          "ref": {
+            "type": "quote",
+            "tweetId": "2026540998456246272",
+            "author": {
+              "id": "111",
+              "handle": "@dev_one"
+            },
+            "text": "no rug here"
+          }
+        }
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "tweet/content twitter:2026541011039158272",
+      "rule": "target-id",
+      "decision": "fire",
+      "mint": "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3",
+      "action": "buy",
+      "source": null
+    },
+    {
+      "event": "tweet/content twitter:2026541011039158272",
+      "rule": "depth0",
+      "decision": "fire",
+      "mint": "jqwr76eubixztvn3ka2NW4Ewxb5JZs8skn1ju1oa4Qm",
+      "action": "buy",
+      "source": null
+    },
+    {
+      "event": "tweet/content twitter:2026541011039158272",
+      "rule": "depth1",
+      "decision": "skip",
+      "code": "keyword_exclude_found"
+    },
+    {
+      "event": "tweet/content twitter:2026541019427766272",
+      "rule": "reacted-to",
+      "decision": "fire",
+      "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+      "action": "buy",
+      "source": null
+    }
+  ]
+}

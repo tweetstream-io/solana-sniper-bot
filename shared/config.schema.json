@@ -1,0 +1,973 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TweetStream sniper example config",
+  "description": "Strategy config shared by the TypeScript and Rust bots. Every property has a default; a minimal config only needs rules.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rules"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Path to this schema, for editor completion."
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/rule"
+      },
+      "description": "The rules. Each has one mode."
+    },
+    "maxSignalAgeMs": {
+      "type": "integer",
+      "default": 5000,
+      "description": "Ignore posts older than this at receipt (publish time from the post id).",
+      "minimum": 0,
+      "$comment": "Safety: a replayed or delayed post must not trigger a buy at a stale price."
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "On-chain and third-party checks run in parallel before a buy.",
+      "properties": {
+        "budgetMs": {
+          "type": "integer",
+          "default": 150,
+          "description": "Time limit for all checks together, in milliseconds.",
+          "minimum": 1,
+          "$comment": "Latency: the most a check can add before the send. A check that misses it counts as unknown."
+        },
+        "onUnknown": {
+          "enum": [
+            "reject",
+            "allow"
+          ],
+          "default": "reject",
+          "description": "What a check that failed or timed out means.",
+          "$comment": "reject is the safe choice."
+        },
+        "rugcheck": {
+          "enum": [
+            "off",
+            "advisory",
+            "required"
+          ],
+          "default": "off",
+          "description": "off: skip. advisory: reject only on a danger result that arrives in time. required: no answer counts as unknown.",
+          "$comment": "Latency: an extra HTTPS request in the parallel check set."
+        },
+        "maxRugcheckScore": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "description": "Reject when the normalised risk score is above this. null turns the score test off.",
+          "minimum": 0
+        },
+        "rejectMintAuthority": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reject tokens whose supply can still be increased.",
+          "$comment": "Skipped for pump.fun curve tokens, whose authorities are fixed by the program."
+        },
+        "rejectFreezeAuthority": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reject tokens whose holder accounts can be frozen.",
+          "$comment": "Skipped for pump.fun curve tokens."
+        },
+        "rejectRiskyExtensions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reject Token-2022 mints with transfer hooks, permanent delegates, default-frozen accounts, pausing, or non-transferable tokens."
+        }
+      }
+    },
+    "spend": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Hard caps on SOL spent, kept in state/ledger.json across restarts.",
+      "properties": {
+        "maxPerTradeSol": {
+          "type": "number",
+          "default": 0.1,
+          "description": "Largest single buy.",
+          "minimum": 0
+        },
+        "maxPerHourSol": {
+          "type": "number",
+          "default": 0.5,
+          "description": "Most SOL spent in any rolling hour.",
+          "minimum": 0
+        },
+        "maxTotalSol": {
+          "type": "number",
+          "default": 1,
+          "description": "Most SOL this bot will ever spend.",
+          "minimum": 0
+        }
+      }
+    },
+    "exits": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "When to sell a position.",
+      "properties": {
+        "takeProfitPct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": 100,
+          "description": "Sell when the position is up this many percent. null turns it off.",
+          "minimum": 0
+        },
+        "stopLossPct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": 50,
+          "description": "Sell when the position is down this many percent. null turns it off.",
+          "minimum": 0
+        },
+        "maxHoldSec": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": 1800,
+          "description": "Sell after this many seconds. null turns it off.",
+          "minimum": 0
+        },
+        "pollMs": {
+          "type": "integer",
+          "default": 2000,
+          "description": "How often to price open positions.",
+          "minimum": 100,
+          "$comment": "Each poll is one RPC read per pump.fun position, one quote per other position."
+        },
+        "sellOnDelete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Sell when the post that triggered the buy is deleted."
+        },
+        "sellSlippagePct": {
+          "type": "number",
+          "default": 30,
+          "description": "Slippage for exit sells, in percent.",
+          "exclusiveMinimum": 0,
+          "maximum": 99
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How transactions are built and sent.",
+      "properties": {
+        "pumpBuilder": {
+          "enum": [
+            "local",
+            "pumpportal"
+          ],
+          "default": "local",
+          "description": "local builds pump.fun buys in process. pumpportal asks the PumpPortal API to build them.",
+          "$comment": "local saves one HTTPS round trip per buy."
+        },
+        "computeUnitLimit": {
+          "type": "integer",
+          "default": 120000,
+          "description": "Compute unit limit for locally built pump.fun trades.",
+          "minimum": 1,
+          "$comment": "A tight limit makes the priority fee per unit higher for the same SOL."
+        },
+        "maxAutoPriorityFeeSol": {
+          "type": "number",
+          "default": 0.005,
+          "description": "Ceiling for priorityFeeSol auto.",
+          "minimum": 0
+        },
+        "maxAutoTipSol": {
+          "type": "number",
+          "default": 0.005,
+          "description": "Ceiling for tipSol auto.",
+          "minimum": 0
+        },
+        "blockhashRefreshMs": {
+          "type": "integer",
+          "default": 400,
+          "description": "How often the background loop fetches a fresh blockhash.",
+          "minimum": 50,
+          "$comment": "Latency: keeps the blockhash fetch off the hot path."
+        },
+        "rebroadcastMs": {
+          "type": "integer",
+          "default": 1500,
+          "description": "How often an unconfirmed transaction is sent again to every sender.",
+          "minimum": 100
+        },
+        "confirmTimeoutMs": {
+          "type": "integer",
+          "default": 60000,
+          "description": "Give up waiting for confirmation after this long and mark the outcome unknown.",
+          "minimum": 1000
+        }
+      }
+    },
+    "senders": {
+      "type": "array",
+      "default": [],
+      "description": "Extra JSON-RPC sendTransaction endpoints, such as a staked low-latency sender. The same signed transaction goes to every sender.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "urlEnv"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Name used in logs and the latency report."
+          },
+          "urlEnv": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$",
+            "description": "Name of the environment variable that holds the URL, so API keys stay in .env."
+          },
+          "tipAccounts": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]{32,44}$"
+            },
+            "default": [],
+            "description": "If the sender requires a tip, its tip accounts. One is picked at random per transaction."
+          },
+          "tipSol": {
+            "type": "number",
+            "minimum": 0,
+            "default": 0,
+            "description": "Tip for this sender, in SOL. Paid whichever sender lands the transaction."
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "accountSpec": {
+      "type": "string",
+      "pattern": "^(@?[A-Za-z0-9_]{1,15}|[0-9]{1,20})$",
+      "description": "Numeric X account id (digits only) or @handle."
+    },
+    "keywords": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "words",
+        "scanDepth"
+      ],
+      "properties": {
+        "words": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Whole words, matched without case."
+        },
+        "scanDepth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4,
+          "description": "0 reads only the account's own text. 1 also reads the post it quotes, replies to, or reposts. 2 goes one level deeper."
+        }
+      },
+      "default": {
+        "words": [],
+        "scanDepth": 0
+      }
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "mode"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique name, used in logs and in the ledger."
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Turn the rule on or off."
+        },
+        "mode": {
+          "enum": [
+            "ca_scanner",
+            "engagement",
+            "new_tweet",
+            "follow",
+            "pfp_update",
+            "callout",
+            "fomo"
+          ],
+          "description": "What makes the rule fire. See docs/modes.md."
+        },
+        "accounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/accountSpec"
+          },
+          "default": [],
+          "description": "Accounts to watch: numeric X account id or @handle.",
+          "$comment": "Ids survive handle changes; handles do not. Prefer ids."
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "text",
+              "url",
+              "meta",
+              "ocr",
+              "reference",
+              "pin",
+              "profile"
+            ]
+          },
+          "default": [
+            "text",
+            "url",
+            "meta",
+            "ocr",
+            "reference",
+            "pin",
+            "profile"
+          ],
+          "description": "ca_scanner: where an address may come from.",
+          "minItems": 1,
+          "$comment": "meta and ocr arrive in a later tweet/meta event, so they fire later than text."
+        },
+        "minConfidence": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "default": "medium",
+          "description": "ca_scanner: lowest signal confidence to act on."
+        },
+        "requireMintInBio": {
+          "type": "boolean",
+          "default": false,
+          "description": "ca_scanner: also require the address in the account's last known bio.",
+          "$comment": "Safety: a hijacked account rarely edits its bio first."
+        },
+        "reactor": {
+          "$ref": "#/$defs/accountSpec",
+          "description": "engagement: the account whose retweet, quote, or reply fires the rule."
+        },
+        "targetTweetId": {
+          "type": "string",
+          "pattern": "^$|^[0-9]{1,20}$",
+          "default": "",
+          "description": "engagement: id of the post the reactor must engage with. Empty means match by reactedTo."
+        },
+        "reactedTo": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/accountSpec"
+          },
+          "default": [],
+          "description": "engagement: accounts whose posts count as targets when targetTweetId is empty."
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "retweet",
+              "quote",
+              "reply"
+            ]
+          },
+          "default": [
+            "retweet",
+            "quote",
+            "reply"
+          ],
+          "description": "engagement: which kinds of engagement count. Likes are private on X, so they cannot be watched.",
+          "minItems": 1
+        },
+        "includeKeywords": {
+          "$ref": "#/$defs/keywords",
+          "description": "engagement, new_tweet, fomo: fire only when one of these words appears within scanDepth (fomo reads the thesis text)."
+        },
+        "excludeKeywords": {
+          "$ref": "#/$defs/keywords",
+          "description": "engagement, new_tweet, fomo: never fire when one of these words appears within scanDepth."
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "post",
+              "retweet",
+              "quote",
+              "reply",
+              "bio"
+            ]
+          },
+          "default": [
+            "post",
+            "quote",
+            "reply"
+          ],
+          "description": "new_tweet: which actions fire the rule. bio fires on a bio change.",
+          "minItems": 1
+        },
+        "followEvents": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "follow",
+              "unfollow"
+            ]
+          },
+          "default": [
+            "follow"
+          ],
+          "description": "follow: fire on follows, unfollows, or both.",
+          "minItems": 1
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/accountSpec"
+          },
+          "default": [],
+          "description": "follow: only fire when the followed account is one of these. Empty matches any."
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "avatar",
+              "banner",
+              "name",
+              "bio",
+              "websiteUrl"
+            ]
+          },
+          "default": [
+            "avatar"
+          ],
+          "description": "pfp_update: which profile fields fire the rule.",
+          "minItems": 1
+        },
+        "callers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+          },
+          "default": [],
+          "description": "callout: pump.fun usernames whose callouts fire the rule. They must also be tracked in the dashboard's Callouts tab."
+        },
+        "calloutKinds": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "callout",
+              "author_update",
+              "reply",
+              "repost"
+            ]
+          },
+          "default": [
+            "callout"
+          ],
+          "minItems": 1,
+          "description": "callout: which callout kinds fire the rule. author_update, reply and repost are later posts about an earlier call."
+        },
+        "maxMultiple": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "default": null,
+          "description": "callout: skip when the event reports the token already ran more than this multiple since the call. null turns it off.",
+          "$comment": "Safety: buying after a 5x run buys someone else's exit."
+        },
+        "requireCallerPosition": {
+          "type": "boolean",
+          "default": false,
+          "description": "callout: fire only when the event reports that the caller holds the token (position.amountHeld above 0)."
+        },
+        "sellWhenCallerExits": {
+          "type": "boolean",
+          "default": false,
+          "description": "callout: sell a position this rule bought when a callout or callout_update from the same caller reports position.amountHeld of 0."
+        },
+        "fomoUsers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+          },
+          "default": [],
+          "description": "fomo: FOMO usernames or author ids whose theses fire the rule. Track them in the dashboard's FOMO tab too."
+        },
+        "fomoCoins": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{32,44}$"
+          },
+          "default": [],
+          "description": "fomo: coin addresses. A thesis by any author on one of these fires the rule, and so does the coin's first observed verification."
+        },
+        "fomoEvents": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "thesis",
+              "token_verified"
+            ]
+          },
+          "default": [
+            "thesis"
+          ],
+          "minItems": 1,
+          "description": "fomo: fire on theses, on first observed token verification of a watched coin, or both."
+        },
+        "sellWhenAuthorExits": {
+          "type": "boolean",
+          "default": false,
+          "description": "fomo: sell a position this rule bought when a watched author's thesis on that coin reports position.closedAt."
+        },
+        "useDetectedCa": {
+          "type": "boolean",
+          "default": false,
+          "description": "engagement, new_tweet, follow, pfp_update: trade the first contract address found in the event (post text, token link, image text, the followed account's bio, or the new bio) when token.mint is empty."
+        },
+        "token": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mint": {
+              "type": "string",
+              "pattern": "^$|^[1-9A-HJ-NP-Za-km-z]{32,44}$",
+              "default": "",
+              "description": "The token to trade. ca_scanner, callout and fomo: leave empty to trade the address in the event, or set it to act only on that token. Other modes: required unless useDetectedCa is true."
+            },
+            "action": {
+              "enum": [
+                "buy",
+                "sell"
+              ],
+              "default": "buy",
+              "description": "buy spends amountSol. sell sells the whole position in this token."
+            },
+            "amountSol": {
+              "type": "number",
+              "default": 0.01,
+              "description": "SOL to spend per buy.",
+              "minimum": 0,
+              "$comment": "Also capped by spend.maxPerTradeSol."
+            }
+          }
+        },
+        "filters": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Checks run after a rule fires and before anything is sent.",
+          "properties": {
+            "maxSnipes": {
+              "type": "integer",
+              "default": 1,
+              "description": "How many times this rule may trade. 0 means no limit.",
+              "minimum": 0,
+              "$comment": "Safety: caps losses from a rule that fires on a compromised account."
+            },
+            "cooldownSec": {
+              "type": "number",
+              "default": 0,
+              "description": "Seconds to wait after this rule fires before it may fire again.",
+              "minimum": 0,
+              "$comment": "Safety: stops a burst of posts from buying many tokens."
+            },
+            "minTokenAgeSec": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "default": null,
+              "description": "Skip tokens younger than this. null turns the check off.",
+              "minimum": 0,
+              "$comment": "Needs market data; see onMissingData."
+            },
+            "maxTokenAgeSec": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "default": null,
+              "description": "Skip tokens older than this. null turns the check off.",
+              "minimum": 0,
+              "$comment": "Needs market data; see onMissingData."
+            },
+            "minMarketCapUsd": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "default": null,
+              "description": "Skip tokens with a smaller market cap. null turns the check off.",
+              "minimum": 0,
+              "$comment": "pump.fun curve tokens are priced from the curve read; other venues need market data."
+            },
+            "maxMarketCapUsd": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "default": null,
+              "description": "Skip tokens with a larger market cap. null turns the check off.",
+              "minimum": 0,
+              "$comment": "Same data as minMarketCapUsd."
+            },
+            "minLiquidityUsd": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "default": null,
+              "description": "Skip tokens with less liquidity. null turns the check off.",
+              "minimum": 0,
+              "$comment": "Same data as minMarketCapUsd."
+            },
+            "maxPoolTaxPct": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "default": 0,
+              "description": "Skip tokens whose transfer fee is above this percent. null turns the check off.",
+              "minimum": 0,
+              "$comment": "Read from the mint account, so it costs no extra request."
+            },
+            "platforms": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "default": [],
+              "description": "Venues this rule may trade on, such as pumpfun, pumpswap, raydium, meteora, orca, moonshot. Empty allows any.",
+              "$comment": "pumpfun is built locally; every other venue goes through Jupiter."
+            },
+            "skipSuspiciousPools": {
+              "type": "boolean",
+              "default": false,
+              "description": "Skip tokens that the safety check service flags as dangerous.",
+              "$comment": "Needs safety.rugcheck turned on."
+            },
+            "skipIfAlreadyBought": {
+              "type": "boolean",
+              "default": true,
+              "description": "Skip a mint this bot already bought, even after a restart.",
+              "$comment": "Safety: stops repeat buys from repeated posts."
+            },
+            "skipIfAlreadyHolding": {
+              "type": "boolean",
+              "default": true,
+              "description": "Skip a mint the bot still holds."
+            },
+            "onMissingData": {
+              "enum": [
+                "reject",
+                "allow"
+              ],
+              "default": "reject",
+              "description": "What to do when a filter needs data that is not available in time.",
+              "$comment": "reject is the safe choice: unknown never counts as passing."
+            }
+          }
+        },
+        "fees": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "slippagePct": {
+              "type": "number",
+              "default": 20,
+              "description": "Largest price move you accept, in percent.",
+              "exclusiveMinimum": 0,
+              "$comment": "Too low and fast-moving launches fail; too high and you overpay.",
+              "maximum": 99
+            },
+            "priorityFeeSol": {
+              "oneOf": [
+                {
+                  "const": "auto"
+                },
+                {
+                  "type": "number",
+                  "minimum": 0
+                }
+              ],
+              "default": "auto",
+              "description": "Priority fee for the whole transaction in SOL, or auto for a recent-fee estimate.",
+              "$comment": "auto reads a cached estimate refreshed in the background, so it adds no latency."
+            },
+            "tipSol": {
+              "oneOf": [
+                {
+                  "const": "auto"
+                },
+                {
+                  "type": "number",
+                  "minimum": 0
+                }
+              ],
+              "default": "auto",
+              "description": "Tip paid to the Jito block engine in SOL, or auto for the recent landed-tip level.",
+              "$comment": "Only paid when antiMev is on."
+            },
+            "antiMev": {
+              "type": "boolean",
+              "default": true,
+              "description": "Also send through the Jito block engine, which protects the transaction from sandwiching."
+            },
+            "retriesOnGraduation": {
+              "type": "integer",
+              "default": 1,
+              "description": "If a pump.fun coin finishes its bonding curve while you buy, retry this many times through Jupiter.",
+              "minimum": 0,
+              "$comment": "Retries only after a definite failure, never after an unknown outcome."
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "ca_scanner"
+              },
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "accounts": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "engagement"
+              },
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reactor"
+            ],
+            "anyOf": [
+              {
+                "properties": {
+                  "targetTweetId": {
+                    "minLength": 1
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "reactedTo": {
+                    "minItems": 1
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "new_tweet",
+                  "follow",
+                  "pfp_update"
+                ]
+              },
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "accounts": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "callout"
+              },
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "callers": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "fomo"
+              },
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "anyOf": [
+              {
+                "properties": {
+                  "fomoUsers": {
+                    "minItems": 1
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "fomoCoins": {
+                    "minItems": 1
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "fomo"
+              },
+              "enabled": {
+                "const": true
+              },
+              "fomoEvents": {
+                "contains": {
+                  "const": "token_verified"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "fomoCoins": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "engagement",
+                  "new_tweet",
+                  "follow",
+                  "pfp_update"
+                ]
+              },
+              "enabled": {
+                "const": true
+              },
+              "useDetectedCa": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "token": {
+                "properties": {
+                  "mint": {
+                    "minLength": 32
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              },
+              "token": {
+                "properties": {
+                  "action": {
+                    "const": "buy"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "token": {
+                "properties": {
+                  "amountSol": {
+                    "exclusiveMinimum": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

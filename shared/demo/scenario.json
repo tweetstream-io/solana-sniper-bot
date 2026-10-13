@@ -1,0 +1,582 @@
+{
+  "description": "Scripted feed for npm run demo. Exercises every rule mode, a duplicate copy on a second connection, a safety rejection, and a delete-triggered exit. Envelopes follow the TweetStream v1 contract.",
+  "keys": {
+    "standard": "demo-standard-key",
+    "ultra": "demo-ultra-key"
+  },
+  "ultraLeadMs": 3,
+  "chain": {
+    "solUsd": 150,
+    "priorityFeeMicroLamports": 40000,
+    "tipFloorSol": 2e-05,
+    "blockHeight": 300000000,
+    "mints": {
+      "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA": {
+        "tokenProgram": "token-2022",
+        "mintAuthority": false,
+        "freezeAuthority": false,
+        "supply": "1000000000000000",
+        "decimals": 6,
+        "curve": {
+          "virtualTokenReserves": "1000000000000000",
+          "virtualQuoteReserves": "32000000000",
+          "realTokenReserves": "720000000000000",
+          "realQuoteReserves": "2000000000",
+          "tokenTotalSupply": "1000000000000000",
+          "complete": false
+        }
+      },
+      "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29": {
+        "tokenProgram": "token-2022",
+        "mintAuthority": false,
+        "freezeAuthority": false,
+        "supply": "1000000000000000",
+        "decimals": 6,
+        "curve": {
+          "virtualTokenReserves": "1000000000000000",
+          "virtualQuoteReserves": "32000000000",
+          "realTokenReserves": "720000000000000",
+          "realQuoteReserves": "2000000000",
+          "tokenTotalSupply": "1000000000000000",
+          "complete": false
+        }
+      },
+      "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN": {
+        "tokenProgram": "token-2022",
+        "mintAuthority": false,
+        "freezeAuthority": false,
+        "supply": "1000000000000000",
+        "decimals": 6,
+        "curve": {
+          "virtualTokenReserves": "1000000000000000",
+          "virtualQuoteReserves": "32000000000",
+          "realTokenReserves": "720000000000000",
+          "realQuoteReserves": "2000000000",
+          "tokenTotalSupply": "1000000000000000",
+          "complete": false
+        }
+      },
+      "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo": {
+        "tokenProgram": "token-2022",
+        "mintAuthority": false,
+        "freezeAuthority": false,
+        "supply": "1000000000000000",
+        "decimals": 6,
+        "curve": {
+          "virtualTokenReserves": "1000000000000000",
+          "virtualQuoteReserves": "32000000000",
+          "realTokenReserves": "720000000000000",
+          "realQuoteReserves": "2000000000",
+          "tokenTotalSupply": "1000000000000000",
+          "complete": false
+        }
+      },
+      "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd": {
+        "tokenProgram": "token-2022",
+        "mintAuthority": false,
+        "freezeAuthority": false,
+        "supply": "1000000000000000",
+        "decimals": 6,
+        "curve": {
+          "virtualTokenReserves": "1000000000000000",
+          "virtualQuoteReserves": "32000000000",
+          "realTokenReserves": "720000000000000",
+          "realQuoteReserves": "2000000000",
+          "tokenTotalSupply": "1000000000000000",
+          "complete": false
+        }
+      },
+      "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2": {
+        "tokenProgram": "token-2022",
+        "mintAuthority": false,
+        "freezeAuthority": false,
+        "supply": "1000000000000000",
+        "decimals": 6,
+        "curve": {
+          "virtualTokenReserves": "1000000000000000",
+          "virtualQuoteReserves": "32000000000",
+          "realTokenReserves": "720000000000000",
+          "realQuoteReserves": "2000000000",
+          "tokenTotalSupply": "1000000000000000",
+          "complete": false
+        }
+      },
+      "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk": {
+        "tokenProgram": "token-2022",
+        "mintAuthority": false,
+        "freezeAuthority": false,
+        "supply": "1000000000000000",
+        "decimals": 6,
+        "curve": {
+          "virtualTokenReserves": "1000000000000000",
+          "virtualQuoteReserves": "32000000000",
+          "realTokenReserves": "720000000000000",
+          "realQuoteReserves": "2000000000",
+          "tokenTotalSupply": "1000000000000000",
+          "complete": false
+        }
+      },
+      "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3": {
+        "tokenProgram": "token-2022",
+        "mintAuthority": false,
+        "freezeAuthority": false,
+        "supply": "1000000000000000",
+        "decimals": 6,
+        "curve": {
+          "virtualTokenReserves": "1000000000000000",
+          "virtualQuoteReserves": "32000000000",
+          "realTokenReserves": "720000000000000",
+          "realQuoteReserves": "2000000000",
+          "tokenTotalSupply": "1000000000000000",
+          "complete": false
+        }
+      },
+      "jqwr76eubixztvn3ka2NW4Ewxb5JZs8skn1ju1oa4Qm": {
+        "tokenProgram": "token-2022",
+        "mintAuthority": false,
+        "freezeAuthority": false,
+        "supply": "1000000000000000",
+        "decimals": 6,
+        "curve": {
+          "virtualTokenReserves": "1000000000000000",
+          "virtualQuoteReserves": "32000000000",
+          "realTokenReserves": "720000000000000",
+          "realQuoteReserves": "2000000000",
+          "tokenTotalSupply": "1000000000000000",
+          "complete": false
+        }
+      },
+      "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19": {
+        "tokenProgram": "spl",
+        "mintAuthority": true,
+        "freezeAuthority": false,
+        "supply": "5000000000000000",
+        "decimals": 6,
+        "curve": null
+      }
+    }
+  },
+  "steps": [
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "ca_scanner: the dev posts a contract address",
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": "{{now}}",
+        "d": {
+          "tweetId": "{{tweet:launch}}",
+          "text": "Launching now. CA: FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+          "createdAt": "{{now}}",
+          "kind": "post",
+          "author": {
+            "id": "1000000000000000001",
+            "handle": "@demo_dev"
+          }
+        }
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "ca_scanner: the dev posts a chart image; TweetStream reads the address from the image",
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": "{{now}}",
+        "d": {
+          "tweetId": "{{tweet:chart}}",
+          "text": "Chart looking good",
+          "createdAt": "{{now}}",
+          "kind": "post",
+          "author": {
+            "id": "1000000000000000001",
+            "handle": "@demo_dev"
+          }
+        }
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "ca_scanner: tweet/meta for the image arrives",
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "meta",
+        "ts": "{{now}}",
+        "d": {
+          "tweetId": "{{tweet:chart}}",
+          "platform": "twitter",
+          "ocr": {
+            "text": "buy H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29 now"
+          }
+        },
+        "id": "meta-chart"
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "ca_scanner: an EVM address is logged and skipped",
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": "{{now}}",
+        "d": {
+          "tweetId": "{{tweet:evm}}",
+          "text": "Also on Base: 0x52908400098527886e0f7030069857d2e4169ee7",
+          "createdAt": "{{now}}",
+          "kind": "post",
+          "author": {
+            "id": "1000000000000000001",
+            "handle": "@demo_dev"
+          }
+        }
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "engagement: the KOL quotes the dev's post and adds a CA",
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": "{{now}}",
+        "d": {
+          "tweetId": "{{tweet:kolquote}}",
+          "text": "This one: 7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+          "createdAt": "{{now}}",
+          "kind": "quote",
+          "author": {
+            "id": "1000000000000000002",
+            "handle": "@demo_kol"
+          },
+          "ref": {
+            "type": "quote",
+            "tweetId": "{{tweet:launch}}",
+            "author": {
+              "id": "1000000000000000001",
+              "handle": "@demo_dev"
+            },
+            "text": "Launching now. CA: FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA"
+          }
+        }
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "engagement: the KOL retweets a dev post containing an exclude word",
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": "{{now}}",
+        "d": {
+          "tweetId": "{{tweet:kolrt}}",
+          "text": "RT @demo_dev: not a scam, promise",
+          "createdAt": "{{now}}",
+          "kind": "retweet",
+          "author": {
+            "id": "1000000000000000002",
+            "handle": "@demo_kol"
+          },
+          "ref": {
+            "type": "retweet",
+            "tweetId": "{{tweet:devscam}}",
+            "author": {
+              "id": "1000000000000000001",
+              "handle": "@demo_dev"
+            },
+            "text": "not a scam, promise"
+          }
+        }
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "new_tweet: the celebrity posts without the keyword",
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": "{{now}}",
+        "d": {
+          "tweetId": "{{tweet:celeb1}}",
+          "text": "Good morning everyone",
+          "createdAt": "{{now}}",
+          "kind": "post",
+          "author": {
+            "id": "1000000000000000003",
+            "handle": "@demo_celeb"
+          }
+        }
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "new_tweet: the celebrity posts the keyword",
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": "{{now}}",
+        "d": {
+          "tweetId": "{{tweet:celeb2}}",
+          "text": "Taking the dog to the moon",
+          "createdAt": "{{now}}",
+          "kind": "post",
+          "author": {
+            "id": "1000000000000000003",
+            "handle": "@demo_celeb"
+          }
+        }
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "follow: the whale follows an account whose bio holds a CA",
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "follow",
+        "ts": "{{now}}",
+        "d": {
+          "actor": {
+            "id": "1000000000000000004",
+            "handle": "@demo_whale"
+          },
+          "target": {
+            "id": "1000000000000000010",
+            "handle": "@demo_launch",
+            "bio": "Official token 3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd"
+          },
+          "eventId": "follow-1",
+          "kind": "FOLLOW",
+          "observedAt": "{{now}}"
+        },
+        "id": "follow-1"
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "follow: the whale follows an account; the payload has no bio",
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "follow",
+        "ts": "{{now}}",
+        "d": {
+          "actor": {
+            "id": "1000000000000000004",
+            "handle": "@demo_whale"
+          },
+          "target": {
+            "id": "1000000000000000011",
+            "handle": "@demo_quiet"
+          },
+          "eventId": "follow-2",
+          "kind": "FOLLOW",
+          "observedAt": "{{now}}"
+        },
+        "id": "follow-2"
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "pfp_update: the project changes its avatar",
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": "{{now}}",
+        "d": {
+          "actor": {
+            "id": "1000000000000000005",
+            "handle": "@demo_project"
+          },
+          "changes": {
+            "avatar": "https://example.com/new-avatar.png"
+          },
+          "previous": {
+            "avatar": "https://example.com/old-avatar.png"
+          },
+          "eventId": "profile-1",
+          "kind": "PROFILE",
+          "observedAt": "{{now}}"
+        },
+        "id": "profile-1"
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "ca_scanner: the dev adds a CA to its bio",
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": "{{now}}",
+        "d": {
+          "actor": {
+            "id": "1000000000000000001",
+            "handle": "@demo_dev"
+          },
+          "changes": {
+            "bio": "Building. Token: FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk"
+          },
+          "previous": {
+            "bio": "Building."
+          },
+          "eventId": "profile-2",
+          "kind": "PROFILE",
+          "observedAt": "{{now}}"
+        },
+        "id": "profile-2"
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "ca_scanner: the dev pins a post with a CA",
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "pin",
+        "ts": "{{now}}",
+        "d": {
+          "action": "pin",
+          "tweetId": "{{tweet:pinned}}",
+          "platform": "twitter",
+          "author": {
+            "id": "1000000000000000001",
+            "handle": "@demo_dev"
+          },
+          "eventId": "pin-1",
+          "observedAt": "{{now}}",
+          "text": "Pinned: jqwr76eubixztvn3ka2NW4Ewxb5JZs8skn1ju1oa4Qm"
+        }
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "callout: a watched pump.fun caller calls a token; the safety check rejects it",
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout",
+        "ts": "{{now}}",
+        "d": {
+          "platform": "pump_fun",
+          "caller": {
+            "username": "demo_caller"
+          },
+          "kind": "callout",
+          "token": {
+            "address": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+            "chainId": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            "symbol": "DEMO"
+          },
+          "marketCapUsd": 42000,
+          "multiple": 1.1,
+          "calloutId": "call-1",
+          "createdAt": "{{now}}"
+        },
+        "id": "callout.demo-1"
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "callout: callout_update enriches the call and never buys",
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout_update",
+        "ts": "{{now}}",
+        "d": {
+          "platform": "pump_fun",
+          "updateOf": "callout.demo-1",
+          "caller": {
+            "username": "demo_caller"
+          },
+          "kind": "callout",
+          "token": {
+            "address": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+            "symbol": "DEMO"
+          },
+          "calloutId": "call-1",
+          "createdAt": "{{now}}"
+        },
+        "id": "callout_update.demo-1"
+      }
+    },
+    {
+      "afterMs": 400,
+      "to": "both",
+      "note": "fomo: a watched FOMO user posts a thesis",
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "thesis",
+        "ts": "{{now}}",
+        "d": {
+          "platform": "fomo",
+          "coin": {
+            "address": "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3",
+            "networkId": 1399811149,
+            "symbol": "FOMODEMO",
+            "metadataObservedAt": "{{now}}",
+            "marketCapUsd": "35000"
+          },
+          "author": {
+            "id": "fomo-user-1",
+            "username": "demo_fomo",
+            "verified": true
+          },
+          "thesis": {
+            "id": "thesis-1",
+            "text": "Strong community, early",
+            "createdAt": "{{now}}",
+            "likes": 0,
+            "replies": 0
+          }
+        },
+        "id": "fomo:thesis:thesis-1"
+      }
+    },
+    {
+      "afterMs": 800,
+      "to": "both",
+      "note": "exits: the dev deletes the launch post, so the position bought on it is sold",
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "delete",
+        "ts": "{{now}}",
+        "d": {
+          "tweetId": "{{tweet:launch}}",
+          "platform": "twitter",
+          "author": {
+            "id": "1000000000000000001",
+            "handle": "@demo_dev"
+          },
+          "eventId": "delete-1",
+          "deletedAt": "{{now}}"
+        }
+      }
+    }
+  ]
+}

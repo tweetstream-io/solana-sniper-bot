@@ -1,0 +1,391 @@
+{
+  "name": "fomo",
+  "description": "FOMO: theses by a watched author or on a watched coin fire, exclude keywords skip, a watched coin's first verification fires once, a closing thesis sells and never buys.",
+  "config": {
+    "rules": [
+      {
+        "name": "fomo",
+        "mode": "fomo",
+        "fomoUsers": [
+          "alpha"
+        ],
+        "fomoCoins": [
+          "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3"
+        ],
+        "fomoEvents": [
+          "thesis",
+          "token_verified"
+        ],
+        "excludeKeywords": {
+          "words": [
+            "exit liquidity"
+          ],
+          "scanDepth": 0
+        },
+        "sellWhenAuthorExits": true,
+        "filters": {
+          "maxSnipes": 0
+        }
+      },
+      {
+        "name": "verified",
+        "mode": "fomo",
+        "fomoCoins": [
+          "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19"
+        ],
+        "fomoEvents": [
+          "token_verified"
+        ]
+      }
+    ]
+  },
+  "positions": [
+    {
+      "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
+      "rule": "fomo"
+    }
+  ],
+  "events": [
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "thesis",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "fomo",
+          "coin": {
+            "address": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+            "networkId": 1399811149
+          },
+          "author": {
+            "id": "u1",
+            "username": "alpha",
+            "verified": true
+          },
+          "thesis": {
+            "id": "th-1",
+            "text": "early",
+            "createdAt": 1772000001000,
+            "likes": 0,
+            "replies": 0
+          }
+        },
+        "id": "th-1"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "thesis",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "fomo",
+          "coin": {
+            "address": "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3",
+            "networkId": 1399811149
+          },
+          "author": {
+            "id": "u2",
+            "username": "beta",
+            "verified": true
+          },
+          "thesis": {
+            "id": "th-2",
+            "text": "looks good",
+            "createdAt": 1772000001000,
+            "likes": 0,
+            "replies": 0
+          }
+        },
+        "id": "th-2"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "thesis",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "fomo",
+          "coin": {
+            "address": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+            "networkId": 1399811149
+          },
+          "author": {
+            "id": "u2",
+            "username": "beta",
+            "verified": true
+          },
+          "thesis": {
+            "id": "th-3",
+            "text": "meh",
+            "createdAt": 1772000001000,
+            "likes": 0,
+            "replies": 0
+          }
+        },
+        "id": "th-3"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "thesis",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "fomo",
+          "coin": {
+            "address": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+            "networkId": 1399811149
+          },
+          "author": {
+            "id": "u1",
+            "username": "alpha",
+            "verified": true
+          },
+          "thesis": {
+            "id": "th-4",
+            "text": "this is exit liquidity",
+            "createdAt": 1772000001000,
+            "likes": 0,
+            "replies": 0
+          }
+        },
+        "id": "th-4"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "token_verified",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "fomo",
+          "coin": {
+            "address": "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3",
+            "networkId": 1399811149
+          },
+          "observedAt": 1772000001000
+        },
+        "id": "tv-1"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "token_verified",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "fomo",
+          "coin": {
+            "address": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+            "networkId": 1399811149
+          },
+          "observedAt": 1772000001000
+        },
+        "id": "tv-2"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "token_verified",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "fomo",
+          "coin": {
+            "address": "jqwr76eubixztvn3ka2NW4Ewxb5JZs8skn1ju1oa4Qm",
+            "networkId": 1399811149
+          },
+          "observedAt": 1772000001000
+        },
+        "id": "tv-3"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "thesis",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "fomo",
+          "coin": {
+            "address": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
+            "networkId": 1399811149
+          },
+          "author": {
+            "id": "u1",
+            "username": "alpha",
+            "verified": true
+          },
+          "thesis": {
+            "id": "th-5",
+            "text": "closing",
+            "createdAt": 1772000001000,
+            "likes": 0,
+            "replies": 0
+          },
+          "position": {
+            "closedAt": 1772000001000
+          }
+        },
+        "id": "th-5"
+      }
+    }
+  ],
+  "expectedSignals": [
+    {
+      "event": "account/thesis th-1",
+      "source": "fomo",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "fomo",
+        "id": "u1",
+        "handle": "alpha"
+      }
+    },
+    {
+      "event": "account/thesis th-2",
+      "source": "fomo",
+      "chain": "solana",
+      "mint": "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3",
+      "confidence": "high",
+      "actor": {
+        "namespace": "fomo",
+        "id": "u2",
+        "handle": "beta"
+      }
+    },
+    {
+      "event": "account/thesis th-3",
+      "source": "fomo",
+      "chain": "solana",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "confidence": "high",
+      "actor": {
+        "namespace": "fomo",
+        "id": "u2",
+        "handle": "beta"
+      }
+    },
+    {
+      "event": "account/thesis th-4",
+      "source": "fomo",
+      "chain": "solana",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "confidence": "high",
+      "actor": {
+        "namespace": "fomo",
+        "id": "u1",
+        "handle": "alpha"
+      }
+    },
+    {
+      "event": "account/token_verified tv-1",
+      "source": "fomo",
+      "chain": "solana",
+      "mint": "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3",
+      "confidence": "high",
+      "actor": {
+        "namespace": "none"
+      }
+    },
+    {
+      "event": "account/token_verified tv-2",
+      "source": "fomo",
+      "chain": "solana",
+      "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+      "confidence": "high",
+      "actor": {
+        "namespace": "none"
+      }
+    },
+    {
+      "event": "account/token_verified tv-3",
+      "source": "fomo",
+      "chain": "solana",
+      "mint": "jqwr76eubixztvn3ka2NW4Ewxb5JZs8skn1ju1oa4Qm",
+      "confidence": "high",
+      "actor": {
+        "namespace": "none"
+      }
+    },
+    {
+      "event": "account/thesis th-5",
+      "source": "fomo",
+      "chain": "solana",
+      "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
+      "confidence": "high",
+      "actor": {
+        "namespace": "fomo",
+        "id": "u1",
+        "handle": "alpha"
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "account/thesis th-1",
+      "rule": "fomo",
+      "decision": "fire",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "action": "buy",
+      "source": "fomo"
+    },
+    {
+      "event": "account/thesis th-2",
+      "rule": "fomo",
+      "decision": "fire",
+      "mint": "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3",
+      "action": "buy",
+      "source": "fomo"
+    },
+    {
+      "event": "account/thesis th-4",
+      "rule": "fomo",
+      "decision": "skip",
+      "code": "keyword_exclude_found"
+    },
+    {
+      "event": "account/token_verified tv-2",
+      "rule": "verified",
+      "decision": "fire",
+      "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+      "action": "buy",
+      "source": "fomo"
+    },
+    {
+      "event": "account/thesis th-5",
+      "rule": "fomo",
+      "decision": "exit",
+      "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
+      "code": "author_exited"
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "name": "delete-exit",
+  "description": "Deleting the post a position was bought on produces an exit; deleting another post does nothing.",
+  "config": {
+    "rules": [
+      {
+        "name": "scan",
+        "mode": "ca_scanner",
+        "accounts": [
+          "111"
+        ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      }
+    ]
+  },
+  "positions": [
+    {
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "postKey": "twitter:2026541002650550272",
+      "rule": "scan"
+    }
+  ],
+  "events": [
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000009000,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "delete",
+        "ts": 1772000009000,
+        "d": {
+          "tweetId": "2026541002650550272",
+          "platform": "twitter",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "eventId": "del-1",
+          "deletedAt": 1772000009000
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000009000,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "delete",
+        "ts": 1772000009000,
+        "d": {
+          "tweetId": "2026541006844854272",
+          "platform": "twitter",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "eventId": "del-2",
+          "deletedAt": 1772000009000
+        }
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "tweet/delete twitter:2026541002650550272",
+      "decision": "exit",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "code": "post_deleted"
+    }
+  ]
+}

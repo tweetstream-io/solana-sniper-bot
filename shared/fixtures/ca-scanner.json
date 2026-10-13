@@ -1,0 +1,204 @@
+{
+  "name": "ca-scanner",
+  "description": "CA scanner: text, image text and detected tokens from a later tweet/meta, quoted posts, low-confidence chart links, unwatched authors.",
+  "config": {
+    "rules": [
+      {
+        "name": "scan",
+        "mode": "ca_scanner",
+        "accounts": [
+          "111"
+        ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000001100,
+        "d": {
+          "tweetId": "2026541002650550272",
+          "text": "CA: FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+          "createdAt": 1772000001000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000002100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000002100,
+        "d": {
+          "tweetId": "2026541006844854272",
+          "text": "chart",
+          "createdAt": 1772000002000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000002300,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "meta",
+        "ts": 1772000002300,
+        "d": {
+          "tweetId": "2026541006844854272",
+          "platform": "twitter",
+          "detected": {
+            "tokens": [
+              {
+                "chain": "solana",
+                "contract": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+                "symbol": "TWO",
+                "sources": [
+                  "ocr"
+                ]
+              }
+            ]
+          },
+          "ocr": {
+            "text": "buy H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29"
+          }
+        },
+        "id": "meta-1"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000003100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000003100,
+        "d": {
+          "tweetId": "2026541011039158272",
+          "text": "chart link",
+          "createdAt": 1772000003000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "urls": [
+            {
+              "url": "https://dexscreener.com/solana/GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000004100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000004100,
+        "d": {
+          "tweetId": "2026541015233462272",
+          "text": "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd",
+          "createdAt": 1772000004000,
+          "kind": "post",
+          "author": {
+            "id": "999",
+            "handle": "@someone"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000005100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000005100,
+        "d": {
+          "tweetId": "2026541019427766272",
+          "text": "look",
+          "createdAt": 1772000005000,
+          "kind": "quote",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "ref": {
+            "type": "quote",
+            "tweetId": "2026540998456246272",
+            "author": {
+              "id": "999",
+              "handle": "@someone"
+            },
+            "text": "CA HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2"
+          }
+        }
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "tweet/content twitter:2026541002650550272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "action": "buy",
+      "source": "text"
+    },
+    {
+      "event": "tweet/meta twitter:2026541006844854272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "action": "buy",
+      "source": "meta"
+    },
+    {
+      "event": "tweet/meta twitter:2026541006844854272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "action": "buy",
+      "source": "ocr"
+    },
+    {
+      "event": "tweet/content twitter:2026541011039158272",
+      "rule": "scan",
+      "decision": "skip",
+      "code": "low_confidence"
+    },
+    {
+      "event": "tweet/content twitter:2026541019427766272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2",
+      "action": "buy",
+      "source": "reference"
+    }
+  ]
+}
