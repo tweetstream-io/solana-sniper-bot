@@ -1,0 +1,122 @@
+{
+  "$schema": "../config.schema.json",
+  "rules": [
+    {
+      "name": "dev-ca",
+      "mode": "ca_scanner",
+      "accounts": [
+        "1000000000000000001"
+      ],
+      "token": {
+        "amountSol": 0.01
+      },
+      "filters": {
+        "maxSnipes": 0
+      }
+    },
+    {
+      "name": "kol-engagement",
+      "mode": "engagement",
+      "reactor": "1000000000000000002",
+      "reactedTo": [
+        "demo_dev"
+      ],
+      "actions": [
+        "quote",
+        "reply",
+        "retweet"
+      ],
+      "excludeKeywords": {
+        "words": [
+          "scam"
+        ],
+        "scanDepth": 1
+      },
+      "useDetectedCa": true,
+      "token": {
+        "amountSol": 0.01
+      }
+    },
+    {
+      "name": "celeb-moon",
+      "mode": "new_tweet",
+      "accounts": [
+        "1000000000000000003"
+      ],
+      "events": [
+        "post"
+      ],
+      "includeKeywords": {
+        "words": [
+          "moon"
+        ],
+        "scanDepth": 0
+      },
+      "token": {
+        "mint": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
+        "amountSol": 0.01
+      }
+    },
+    {
+      "name": "whale-follow",
+      "mode": "follow",
+      "accounts": [
+        "1000000000000000004"
+      ],
+      "useDetectedCa": true,
+      "token": {
+        "amountSol": 0.01
+      }
+    },
+    {
+      "name": "project-pfp",
+      "mode": "pfp_update",
+      "accounts": [
+        "1000000000000000005"
+      ],
+      "fields": [
+        "avatar"
+      ],
+      "token": {
+        "mint": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2",
+        "amountSol": 0.01
+      }
+    },
+    {
+      "name": "caller",
+      "mode": "callout",
+      "callers": [
+        "demo_caller"
+      ],
+      "maxMultiple": 3,
+      "token": {
+        "amountSol": 0.01
+      }
+    },
+    {
+      "name": "fomo-thesis",
+      "mode": "fomo",
+      "fomoUsers": [
+        "demo_fomo"
+      ],
+      "fomoCoins": [
+        "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3"
+      ],
+      "fomoEvents": [
+        "thesis",
+        "token_verified"
+      ],
+      "token": {
+        "amountSol": 0.01
+      }
+    }
+  ],
+  "spend": {
+    "maxPerTradeSol": 0.05,
+    "maxPerHourSol": 1,
+    "maxTotalSol": 1
+  },
+  "exits": {
+    "pollMs": 1000
+  }
+}
