@@ -480,7 +480,7 @@
     {
       "afterMs": 400,
       "to": "both",
-      "note": "callout: a watched pump.fun caller calls a token; the safety check rejects it",
+      "note": "callout: a watched pump.fun caller calls a token that is not on a pump.fun curve, so it is skipped",
       "envelope": {
         "v": 1,
         "t": "account",

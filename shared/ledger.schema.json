@@ -28,7 +28,7 @@
       "properties": {
         "totalLamports": { "$ref": "#/$defs/lamports" },
         "recent": {
-          "description": "Buys of the last hour, for spend.maxPerHourSol.",
+          "description": "Trades of the last hour, for spend.maxPerHourSol.",
           "type": "array",
           "items": {
             "type": "object",
@@ -49,11 +49,10 @@
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["rule", "trigger", "route", "tokenProgram", "openedAt", "costLamports", "tokenAmount", "pendingExits"],
+        "required": ["rule", "trigger", "tokenProgram", "openedAt", "costLamports", "tokenAmount", "pendingExits"],
         "properties": {
           "rule": { "type": "string" },
           "trigger": { "$ref": "#/$defs/trigger" },
-          "route": { "enum": ["pump", "jupiter"] },
           "tokenProgram": { "type": "string" },
           "openedAt": { "$ref": "#/$defs/time" },
           "costLamports": { "$ref": "#/$defs/lamports" },
@@ -61,19 +60,7 @@
             "description": "Raw token units held; null until a balance read returns more than 0.",
             "oneOf": [{ "$ref": "#/$defs/lamports" }, { "type": "null" }]
           },
-          "pendingExits": {
-            "description": "Exits waiting for a sell to confirm.",
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["code", "at"],
-              "properties": {
-                "code": { "type": "string" },
-                "at": { "$ref": "#/$defs/time" }
-              }
-            }
-          }
+          "pendingExits": { "description": "Exits waiting for a sell to confirm.", "$ref": "#/$defs/exits" }
         }
       }
     },
@@ -83,7 +70,7 @@
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["side", "mint", "route", "signature", "blockhash", "lastValidBlockHeight", "reservedLamports", "amountLamports", "rule", "trigger", "tokenProgram", "sentAt"],
+        "required": ["side", "mint", "route", "signature", "blockhash", "lastValidBlockHeight", "reservedLamports", "amountLamports", "rule", "trigger", "tokenProgram", "sentAt", "pendingExits"],
         "properties": {
           "side": { "enum": ["buy", "sell"] },
           "mint": { "type": "string" },
@@ -94,12 +81,13 @@
           },
           "blockhash": { "type": "string" },
           "lastValidBlockHeight": { "type": ["integer", "null"] },
-          "reservedLamports": { "description": "Largest possible wallet debit, held against the spend caps; 0 for a sell.", "$ref": "#/$defs/lamports" },
+          "reservedLamports": { "description": "Largest possible wallet debit, held against the spend caps. A sell reserves only its fees and tip.", "$ref": "#/$defs/lamports" },
           "amountLamports": { "description": "What a buy spends on the token, which becomes the position's cost; 0 for a sell.", "$ref": "#/$defs/lamports" },
           "rule": { "type": "string" },
           "trigger": { "$ref": "#/$defs/trigger" },
           "tokenProgram": { "type": "string" },
-          "sentAt": { "$ref": "#/$defs/time" }
+          "sentAt": { "$ref": "#/$defs/time" },
+          "pendingExits": { "description": "Exits that arrived while a buy was pending; the position takes them over when the buy confirms. Always empty for a sell.", "$ref": "#/$defs/exits" }
         }
       }
     }
@@ -107,6 +95,18 @@
   "$defs": {
     "lamports": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" },
     "time": { "type": "integer", "minimum": 0 },
+    "exits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "at"],
+        "properties": {
+          "code": { "type": "string" },
+          "at": { "$ref": "#/$defs/time" }
+        }
+      }
+    },
     "trigger": {
       "description": "The event a buy came from; postKey lets a delete of that post sell it.",
       "type": "object",

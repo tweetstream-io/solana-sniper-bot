@@ -1,34 +1,62 @@
 {
   "version": 2,
   "mode": "live",
-  "purchases": {},
+  "purchases": {
+    "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN": {
+      "rule": "fomo",
+      "at": 1772000000000
+    }
+  },
   "spend": {
-    "totalLamports": "12000000",
+    "totalLamports": "19028480",
     "recent": [
       {
         "tradeId": "m6x3-0",
         "at": 1772000000000,
-        "lamports": "12000000"
+        "lamports": "14023480"
+      },
+      {
+        "tradeId": "m6x4-1",
+        "at": 1772001800000,
+        "lamports": "5005000"
       }
     ]
   },
-  "positions": {},
-  "pending": {
-    "m6x3-0": {
-      "side": "buy",
-      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
-      "route": "jupiter",
-      "signature": null,
-      "blockhash": "US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx",
-      "lastValidBlockHeight": null,
-      "reservedLamports": "12000000",
-      "amountLamports": "10000000",
+  "positions": {
+    "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN": {
       "rule": "fomo",
       "trigger": {
         "eventRef": "account/thesis th-1"
       },
       "tokenProgram": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-      "sentAt": 1772000000000
+      "openedAt": 1772000000000,
+      "costLamports": "10000000",
+      "tokenAmount": "350000000000",
+      "pendingExits": [
+        {
+          "code": "max_hold",
+          "at": 1772001800000
+        }
+      ]
+    }
+  },
+  "pending": {
+    "m6x4-1": {
+      "side": "sell",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "route": "jupiter",
+      "signature": null,
+      "blockhash": "US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx",
+      "lastValidBlockHeight": null,
+      "reservedLamports": "5005000",
+      "amountLamports": "0",
+      "rule": "fomo",
+      "trigger": {
+        "eventRef": "account/thesis th-1"
+      },
+      "tokenProgram": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+      "sentAt": 1772001800000,
+      "pendingExits": []
     }
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "malformed-and-ids",
-  "description": "A payload missing required fields is skipped without stopping the stream. Events without an envelope id are deduplicated by payload ids (calloutId, kind and replyId; thesis id).",
+  "description": "A payload missing a field the bot reads, or with a field of the wrong type, is skipped without stopping the stream: a post without kind, a profile change that is not a string. A post assembled from updates produces nothing until it has a kind, so the address in its first update is never traded. Events without an envelope id are deduplicated by payload ids (calloutId, kind and replyId; thesis id).",
   "config": {
     "rules": [
       {
@@ -192,6 +192,82 @@
           }
         }
       }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000003000,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000003000,
+        "d": {
+          "tweetId": "2026541011039158272",
+          "text": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
+          "createdAt": 1772000003000,
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000003500,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "update",
+        "ts": 1772000003500,
+        "id": "upd-1",
+        "d": {
+          "tweetId": "2026541013136310272",
+          "text": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000003600,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "update",
+        "ts": 1772000003600,
+        "id": "upd-2",
+        "d": {
+          "tweetId": "2026541013136310272",
+          "kind": "post",
+          "text": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19"
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000003700,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": 1772000003700,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "dev_one"
+          },
+          "changes": {
+            "bio": 123
+          },
+          "eventId": "pu-bad",
+          "kind": "PROFILE",
+          "observedAt": 1772000003000
+        }
+      }
     }
   ],
   "expectedDecisions": [
@@ -215,6 +291,13 @@
       "decision": "fire",
       "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
       "source": "fomo"
+    },
+    {
+      "event": "tweet/update twitter:2026541013136310272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+      "source": "text"
     }
   ]
 }

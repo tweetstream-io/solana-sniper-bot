@@ -139,7 +139,8 @@
           "author": {
             "id": "111",
             "handle": "@dev_one"
-          }
+          },
+          "kind": "post"
         }
       }
     },

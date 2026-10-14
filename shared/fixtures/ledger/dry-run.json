@@ -24,7 +24,6 @@
         "eventRef": "tweet/content twitter:2026541002650550272",
         "postKey": "twitter:2026541002650550272"
       },
-      "route": "pump",
       "tokenProgram": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
       "openedAt": 1772000000000,
       "costLamports": "10000000",

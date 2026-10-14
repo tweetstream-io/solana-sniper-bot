@@ -8,7 +8,7 @@
     }
   },
   "spend": {
-    "totalLamports": "28482840",
+    "totalLamports": "28587840",
     "recent": [
       {
         "tradeId": "m6x0-0",
@@ -19,6 +19,11 @@
         "tradeId": "m6x1-1",
         "at": 1772000005000,
         "lamports": "14482840"
+      },
+      {
+        "tradeId": "m6x2-2",
+        "at": 1772000006000,
+        "lamports": "105000"
       }
     ]
   },
@@ -29,7 +34,6 @@
         "eventRef": "tweet/content twitter:2026541002650550272",
         "postKey": "twitter:2026541002650550272"
       },
-      "route": "pump",
       "tokenProgram": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
       "openedAt": 1772000000000,
       "costLamports": "14000000",
@@ -54,10 +58,17 @@
       "amountLamports": "10000000",
       "rule": "callers",
       "trigger": {
-        "eventRef": "account/callout c-1"
+        "eventRef": "tweet/content twitter:2026541006844854272",
+        "postKey": "twitter:2026541006844854272"
       },
       "tokenProgram": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-      "sentAt": 1772000005000
+      "sentAt": 1772000005000,
+      "pendingExits": [
+        {
+          "code": "post_deleted",
+          "at": 1772000005500
+        }
+      ]
     },
     "m6x2-2": {
       "side": "sell",
@@ -66,7 +77,7 @@
       "signature": "gaiC7Rnf9J6tV3SGwJyzvMDdz9RMmreSWZDyDK682MUB3bdBc5gVodbQCgxJUR7CVEkqMnd9xjWo8q8YP1RYyub",
       "blockhash": "QWmroo4YnnMqYW3cnxWkFdaTxGD3P7vMSzwMHGbUzwF",
       "lastValidBlockHeight": 1160,
-      "reservedLamports": "0",
+      "reservedLamports": "105000",
       "amountLamports": "0",
       "rule": "dev-ca",
       "trigger": {
@@ -74,7 +85,8 @@
         "postKey": "twitter:2026541002650550272"
       },
       "tokenProgram": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
-      "sentAt": 1772000006000
+      "sentAt": 1772000006000,
+      "pendingExits": []
     }
   }
 }

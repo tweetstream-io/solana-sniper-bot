@@ -7,7 +7,7 @@ The TypeScript bot (`ts/`) and the Rust bot (`rust/`) must behave the same way. 
 | `config.schema.json` | the config format and every default |
 | `addresses.json` | contract address extraction: patterns, the 32-byte rule, token link patterns, the denylist |
 | `ledger.schema.json` | the trade state file (`state/live.json`, `state/dry-run.json`), version 2 |
-| `trading.json` | Jito tip accounts and the Jupiter `/execute` code map |
+| `trading.json` | Jito tip accounts and the Jupiter `/execute` code map for sells |
 | `fixtures/*.json` | event conformance cases: feed events in, signals and rule decisions out |
 | `fixtures/config/*.json` | config conformance cases: defaults filled, errors reported |
 | `fixtures/ledger/*.json` | state files that must load and write back unchanged |
@@ -84,7 +84,7 @@ Which activities each mode listens to (the rest of a mode's behavior is in [docs
 | `callout` | callouts and callout updates | `callers` |
 | `fomo` | theses and token verifications | `fomoUsers`, or the coin in `fomoCoins` |
 
-Payload checks: before detection, the bot checks the fields it reads for that pair (for example `tweetId`, `author`, and `kind` on `tweet/content`; `eventId` on follows and profile updates; `caller.username`, `token.address`, and `calloutId` on callouts). An event missing one is skipped with the field's name in the log, produces no signals and no decisions, and does not stop later events.
+Payload checks: before detection, the bot checks the fields it reads for that pair (for example `tweetId`, `author`, and `kind` on `tweet/content`; `eventId` on follows and profile updates; `caller.username`, `token.address`, and `calloutId` on callouts). `tweet/content` needs a `kind`, and a `tweet/update` that carries one needs a valid one; there is no default. Every value in a profile update's `changes` and `previous` must be a string or `null`. An event that fails a check is skipped with the field's name in the log, produces no signals and no decisions, and does not stop later events.
 
 ## Signal JSON
 
@@ -102,7 +102,7 @@ One contract address found in one event.
 
 Signals per event, in this order, one per address:
 
-- posts (`tweet/content`, `tweet/update`, `tweet/meta`): addresses from `urls[].url`, then the text, then referenced posts level by level, then for a stored `tweet/meta`: `detected.tokens` in order (Solana addresses only), then `ocr.text`; an address already reported from the post is not repeated. A `tweet/meta` or `tweet/update` produces nothing until the post has an author with an id or handle; after that every post event reports the signals of the whole merged post.
+- posts (`tweet/content`, `tweet/update`, `tweet/meta`): addresses from `urls[].url`, then the text, then referenced posts level by level, then for a stored `tweet/meta`: `detected.tokens` in order (Solana addresses only), then `ocr.text`; an address already reported from the post is not repeated. A `tweet/meta` or `tweet/update` produces nothing until the post has a `kind` and an author with an id or handle; after that every post event reports the signals of the whole merged post.
 - `tweet/pin`: `d.tweet.urls`, then `d.tweet.text` (or `d.text`).
 - `account/profile_update`: addresses in `bio`, `name`, and `websiteUrl` of `changes` that were not in the baseline of the same field.
 - `account/follow` and `account/unfollow`: addresses in the target's `bio`, then a token link in `websiteUrl`.
@@ -138,49 +138,61 @@ The bot keeps one JSON file per mode: `state/live.json`, or `state/dry-run.json`
 
 Loading:
 
-- Only one process may use a file. Before loading, a bot creates `state/live.lock` (or `state/dry-run.lock`) with exclusive create, holding `{"pid": <pid>, "startedAt": <ms>}`. A lock whose pid is alive refuses the start. A dead pid or an unreadable lock is removed and created again once. The lock is deleted on exit.
+- Only one process may use a file. Before loading, a bot writes `{"pid": <pid>, "startedAt": <ms>}` to a temp file and hard-links it to `state/live.lock` (or `state/dry-run.lock`), so the lock never exists without its content. If the lock already exists, the bot refuses to start, whatever it holds. The message names the pid and whether that process is running, and tells the user to check that no other bot uses the state directory, then delete the lock. The lock is deleted on a clean exit.
 - A missing file is created empty. A version 1 file stops startup with a message to move or delete it; there is no migration. So does a file that fails the schema or belongs to the other mode.
 - Each write goes to a temp file, is flushed with fsync, renamed over the old file, and the directory is fsynced.
 
 Buying:
 
+- The bot buys only pump.fun coins still on their bonding curve and quoted in SOL, with a transaction it builds itself. Any other coin (graduated, quoted in another token, a cashback coin, or a curve that could not be read) is skipped with `unsupported_curve`.
 - One buy per mint, ever. A buy is refused when the mint is in `purchases`, has a pending trade, or has a buy in progress in this process.
 - `maxSnipes` counts a rule's `purchases`, its pending buys, and its buys in progress.
 - Before the transaction is sent, the bot writes its pending entry and adds the spend reservation (see Money bound) in one write. That write first checks the spend caps: per trade, per rolling hour, total. If the caps refuse or the write fails, nothing is sent.
-- The pending entry carries `signature`, `blockhash`, `lastValidBlockHeight` (`null` when unknown), and `amountLamports`, the amount spent on the token, which becomes the position's cost.
-- Jupiter: the pending entry carries the signed transaction's first signature, or `null` when it has none of ours yet. When `/execute` returns a signature, that one is stored.
+- The pending entry carries `signature`, `blockhash`, `lastValidBlockHeight`, `amountLamports` (the amount spent on the token, which becomes the position's cost), and `pendingExits`.
+- A failed buy is final; the bot does not retry it another way.
+
+Selling:
+
+- A position on a live curve is sold with a locally built pump.fun transaction. A position whose curve graduated is sold through Jupiter `/order` and `/execute`.
+- A sell reserves only its fees and tip in `spend` and is never refused by the spend caps, so an exit always goes out.
+- Jupiter sells: the pending entry carries the signed transaction's first signature, or `null` when it is all zeros. A Jupiter sell counts as landed only when `/execute` answers `status: "Success"`, a code listed as landed in `jupiterExecuteCodes` (`trading.json`), and a signature (the one returned, or the stored one). A code listed as rejected ends it like an expiry. Anything else, a timeout, or an unreadable answer leaves it pending, with the returned signature stored when there is one.
 
 Outcomes, each in one write:
 
 | Outcome | Buy | Sell |
 | --- | --- | --- |
-| Confirmed without error | Pending removed. The mint goes into `purchases` and the position opens. Spend settles to the actual debit when it is known. | Pending removed, position removed. |
-| Confirmed with an error | Pending removed. Not a purchase. Spend keeps the actual debit, or the whole reservation when unknown. | Pending removed. The position and its `pendingExits` stay. |
-| Expired | Pending removed and the reservation refunded. | Pending removed. |
-| Jupiter rejection | Same as expired. | Same as expired. |
+| Confirmed without error | Pending removed. The mint goes into `purchases` and the position opens with the pending entry's `pendingExits`. Spend settles to the actual debit when it is known. | Pending removed, position removed. Spend keeps the reservation. |
+| Confirmed with an error | Pending removed. Not a purchase. Spend keeps the actual debit, or the whole reservation when unknown. | Pending removed. The position and its `pendingExits` stay. Spend keeps the reservation. |
+| Expired, or rejected by Jupiter | Pending removed and the reservation refunded. | Same as a buy. |
 | Unknown | Stays pending. Nothing is refunded. | Stays pending. |
 
-The Jupiter `/execute` code maps through `jupiterExecuteCodes` in `trading.json`. Any other code, a timeout, or an unreadable answer leaves the trade pending.
+Settling replaces the trade's reservation in `spend.totalLamports` even when its `spend.recent` entry has already left the hour window.
 
-Reconciler, at startup and every 2 seconds (a run that starts while another runs returns at once):
+Reconciler, at startup and every 2 seconds (a run that starts while another runs returns at once). For each pending trade this process is not sending:
 
-- For each pending trade this process is not sending, ask `getSignatureStatuses` (with `searchTransactionHistory: true`). A confirmed signature resolves it.
-- A trade expires only when the signature is not found and `isBlockhashValid` for its `blockhash` (at `processed`) returns `false`. A failed call keeps it pending.
-- A pending trade with `signature: null` waits for manual review; the bot logs it once.
-- A position with `tokenAmount: null` gets a balance read; the amount is stored once it is above 0.
-- A position with `pendingExits`, a known balance, and no pending sell is sold.
+1. Ask `getSignatureStatuses` (with `searchTransactionHistory: true`). A confirmed signature resolves the trade. A signature that is seen but not confirmed keeps it pending.
+2. When the signature is not found, ask `isBlockhashValid` for the trade's `blockhash` (at `processed`). Anything but `false`, including a failed call, keeps the trade pending.
+3. Only after `false`, ask `getSignatureStatuses` once more. The trade expires only when this second lookup also finds nothing; a confirmed signature resolves it instead. The order matters: a transaction can confirm between the first lookup and the blockhash check.
+
+A pending trade with `signature: null` (only a Jupiter sell can have one) waits for manual review, and the bot logs it once with these steps. Stop the bot. Look up the wallet's transactions for that mint. If the sell landed, delete `positions[<mint>]` and the pending entry in the same edit. If it did not land, delete the pending entry and subtract its `reservedLamports` from `spend.totalLamports`. Start the bot again. `fixtures/ledger/jupiter-review.json` is a complete example; the two entries look like this:
+
+```json
+"positions": {
+  "<mint>": { "rule": "fomo", "trigger": { "eventRef": "account/thesis th-1" }, "tokenProgram": "...", "openedAt": 1772000000000, "costLamports": "10000000", "tokenAmount": "350000000000", "pendingExits": [ { "code": "max_hold", "at": 1772001800000 } ] }
+},
+"pending": {
+  "<trade id>": { "side": "sell", "mint": "<mint>", "route": "jupiter", "signature": null, "blockhash": "...", "lastValidBlockHeight": null, "reservedLamports": "5005000", "amountLamports": "0", "rule": "fomo", "trigger": { "eventRef": "account/thesis th-1" }, "tokenProgram": "...", "sentAt": 1772001800000, "pendingExits": [] }
+}
+```
 
 Exits:
 
-- An exit for a held mint is added to the position's `pendingExits`. It stays there until a sell confirms. One sell at a time per position.
-- Exits come from a delete of the trigger post (`post_deleted`), take profit, stop loss, and max hold time.
-- Exit pricing: a pump.fun position on a live curve is priced from the curve after fees; any other from a Jupiter quote to SOL. With no price, take profit and stop loss wait for the next check; the time limit still applies.
+- An exit for a held mint is added to the position's `pendingExits`. A delete of the trigger post that arrives while the buy is pending is added to the pending buy's `pendingExits`, and the position takes it over when the buy confirms. Either way it stays until a sell confirms. One sell at a time per position.
+- Exits come from a delete of the trigger post (`post_deleted`), take profit (`take_profit`), stop loss (`stop_loss`), and max hold time (`max_hold`).
+- A position with `pendingExits`, a balance above 0, and no pending trade is sold; the reconciler reads a missing balance first.
+- Exit pricing: a position on a live curve is priced from the curve after fees; a graduated one from a Jupiter quote to SOL. With no price, take profit and stop loss wait for the next check; the time limit still applies.
 
-Routes:
-
-- A pump.fun coin still on its bonding curve and quoted in SOL is bought with a locally built pump.fun transaction. A curve quoted in another token is skipped with `unsupported_curve`. Every other coin goes through Jupiter.
-- A failed buy is final; the bot does not retry it another way.
-- Local transactions go to every `SOLANA_RPC_URLS` entry, or with `antiMev` only to Jito, carrying the Jito tip. Jupiter trades go to Jupiter `/execute` alone.
+Where a transaction goes: locally built transactions go to every `SOLANA_RPC_URLS` entry, or with `antiMev` only to Jito, carrying the Jito tip. Jupiter sells go to Jupiter `/execute` alone.
 
 Caches: a blockhash older than 10 s is never used. The epoch reading expires after 60 s; without a fresh epoch, the higher of a Token-2022 mint's two transfer fees applies. pump.fun fee tiers older than 5 minutes are replaced by the single tier with the highest fee.
 
@@ -188,9 +200,9 @@ Ledger fixtures (`fixtures/ledger/*.json`): load each file in the mode inside it
 
 ## Money bound
 
-A buy reserves its largest possible wallet debit against the spend caps. A locally built pump.fun buy reserves the amount, the 5,000-lamport signature fee, the priority fee (`computeUnitLimit` times the unit price, rounded up), the Jito tip, rent for the token account (2,074,080 lamports), rent for pump.fun's volume accumulator (1,844,400 lamports), and the curve's rent top-up ((115 minus the curve account's length) times 6,960 lamports, when positive).
+A buy reserves its largest possible wallet debit against the spend caps: the amount, the 5,000-lamport signature fee, the priority fee (`computeUnitLimit` times the unit price, rounded up), the Jito tip, rent for the token account (2,074,080 lamports), rent for pump.fun's volume accumulator (1,844,400 lamports), and the curve's rent top-up ((115 minus the curve account's length) times 6,960 lamports, when positive).
 
-Jupiter offers no fee ceiling on `/order`, so a Jupiter buy reserves the amount, the signature fee, token account rent, and `execution.maxAutoPriorityFeeSol`. The bot simulates the signed transaction once, takes the wallet's balance drop plus the fees the message declares (5,000 lamports per signature, and the compute unit price times the compute unit limit, or 200,000 units per instruction when no limit is set), and refuses to send when that is above the reservation.
+A local sell reserves the signature fee, the priority fee, and the Jito tip. A Jupiter sell reserves the signature fee and `execution.maxAutoPriorityFeeSol`, because Jupiter sets its own fee.
 
 ## Event fixtures
 

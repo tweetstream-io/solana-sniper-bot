@@ -66,23 +66,6 @@
           "default": null,
           "description": "Reject when the normalised risk score is above this. null turns the score test off.",
           "minimum": 0
-        },
-        "rejectMintAuthority": {
-          "type": "boolean",
-          "default": true,
-          "description": "Reject tokens whose supply can still be increased.",
-          "$comment": "Skipped for pump.fun curve tokens, whose authorities are fixed by the program."
-        },
-        "rejectFreezeAuthority": {
-          "type": "boolean",
-          "default": true,
-          "description": "Reject tokens whose holder accounts can be frozen.",
-          "$comment": "Skipped for pump.fun curve tokens."
-        },
-        "rejectRiskyExtensions": {
-          "type": "boolean",
-          "default": true,
-          "description": "Reject Token-2022 mints with transfer hooks, permanent delegates, default-frozen accounts, pausing, or non-transferable tokens."
         }
       }
     },
@@ -600,16 +583,6 @@
               "minimum": 0,
               "$comment": "Read from the mint account, so it costs no extra request."
             },
-            "platforms": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              },
-              "default": [],
-              "description": "Venues this rule may trade on, such as pumpfun, pumpswap, raydium, meteora, orca, moonshot. Empty allows any.",
-              "$comment": "pumpfun is built locally; every other venue goes through Jupiter."
-            },
             "skipSuspiciousPools": {
               "type": "boolean",
               "default": false,
@@ -671,7 +644,7 @@
               "type": "boolean",
               "default": true,
               "description": "Send only through the Jito block engine, with a tip, which protects the transaction from sandwiching. Off: send to the RPC URLs instead.",
-              "$comment": "Jupiter trades are landed by Jupiter and ignore this."
+              "$comment": "Jupiter sells of graduated positions are landed by Jupiter and ignore this."
             }
           }
         }
