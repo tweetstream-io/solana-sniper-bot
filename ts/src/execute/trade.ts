@@ -1,51 +1,58 @@
-// Runs fired rules as trades. For one buy, top to bottom: reserve in the TradeBook -> filters/gate.ts
-// -> build and sign (pump.fun locally, PumpPortal, or Jupiter) -> record "sending" on disk -> send
-// (land/land.ts, or Jupiter /execute) -> resolve. Sells and the reconciler, which finishes trades
-// whose outcome was unknown, follow the same steps. State rules live in execute/trades.ts.
+// Runs fired rules as trades. One buy, top to bottom: filters/gate.ts -> build and sign (pump.fun
+// locally, or Jupiter) -> money check -> write the pending trade (execute/trades.ts) -> send
+// (land/land.ts, or Jupiter /execute) -> resolve in one write. Sells and the reconciler, which
+// finishes trades whose outcome was not known, use the same steps.
 
 import { ComputeBudgetProgram, Keypair, PublicKey, SystemProgram, TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import bs58 from "bs58";
+import { readFileSync } from "node:fs";
 import { createPrivateKey, sign as ed25519Sign, type KeyObject } from "node:crypto";
 import type { Config, Rule } from "../setup/config.ts";
 import type { Fire } from "../rules/modes.ts";
-import { solToLamports, type Outcome, type Trade, type TradeBook, type Trigger } from "./trades.ts";
+import { solToLamports, type Outcome, type Pending, type TradeBook, type Trigger } from "./trades.ts";
 import { runGate, type GateResult } from "../filters/gate.ts";
 import { WSOL, type Network } from "../network.ts";
 import type { Lander, SenderTarget } from "../land/land.ts";
 import type { LatencyReport, Trace } from "../report/latency.ts";
 import type { ChainCache } from "./cache.ts";
-import { bondingCurveAddress, buyInstructions, curveFeeBps, lamportsForTokens, localBuildBlocker, parseCurve, sellInstruction, tokensForLamports, warmBuyAccounts, withSlippage } from "./pump.ts";
+import { bondingCurveAddress, buyInstructions, curveFeeBps, lamportsForTokens, parseCurve, sellInstruction, tokensForLamports, unsupportedCurve, warmBuyAccounts, withSlippage, type Curve } from "./pump.ts";
 import { log, short } from "../log.ts";
 
-// Jito tip accounts, as listed by getTipAccounts in https://docs.jito.wtf/lowlatencytxnsend/.
-// Jito says they do not change, so they are not fetched at startup.
-const JITO_TIP_ACCOUNTS = [
-  "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
-  "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
-  "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY",
-  "ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49",
-  "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh",
-  "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt",
-  "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL",
-  "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT",
-].map((a) => new PublicKey(a));
+// Jito tip accounts and the Jupiter /execute code map, shared with the Rust bot.
+const TRADING = JSON.parse(readFileSync(new URL("../../../shared/trading.json", import.meta.url), "utf8")) as {
+  jitoTipAccounts: string[];
+  jupiterExecuteCodes: { landed: number[]; rejected: number[] };
+};
+const JITO_TIP_ACCOUNTS = TRADING.jitoTipAccounts.map((a) => new PublicKey(a));
 
-// Largest costs a buy can add to its principal, for the spend reservation: the signature fee,
-// rent for a Token-2022 token account with ImmutableOwner (170 bytes), and rent for pump.fun's
-// per-user volume accumulator (137 bytes, 0.0018444 SOL in TRADE_V3.md). Rent is (bytes + 128) x 6960.
+// What a buy can cost beyond its amount (shared/README.md, section Money bound). Rent for an
+// account is (bytes + 128) x 6,960 lamports: a Token-2022 token account with ImmutableOwner is
+// 170 bytes, pump.fun's per-user volume accumulator 137 bytes, a full bonding curve 115 bytes.
 const SIGNATURE_FEE = 5_000n;
 const TOKEN_ACCOUNT_RENT = 2_074_080n;
 const VOLUME_ACCUMULATOR_RENT = 1_844_400n;
+const CURVE_LENGTH = 115;
+const RENT_PER_BYTE = 6_960n;
 const JITO_MIN_TIP = 1_000n; // Jito ignores smaller tips
+const COMPUTE_BUDGET = ComputeBudgetProgram.programId.toBase58();
 const ED25519_PKCS8 = Buffer.from("302e020100300506032b657004220420", "hex"); // header for a raw Ed25519 seed
 
-const pick = <T>(list: T[]): T => list[Math.floor(Math.random() * list.length)]!;
+export function jupiterOutcome(code: number): "landed" | "rejected" | "unknown" {
+  if (TRADING.jupiterExecuteCodes.landed.includes(code)) return "landed";
+  return TRADING.jupiterExecuteCodes.rejected.includes(code) ? "rejected" : "unknown";
+}
 
-// What one transaction pays besides its principal, and where it may be sent.
-type FeePlan = { priorityLamports: bigint; jitoTip: bigint; senderTips: Array<{ name: string; account: PublicKey; lamports: bigint }> };
+// The largest debit of a locally built pump.fun buy.
+export function pumpBuyReservation(amount: bigint, priorityLamports: bigint, jitoTip: bigint, curveLength: number): bigint {
+  const topUp = BigInt(Math.max(0, CURVE_LENGTH - curveLength)) * RENT_PER_BYTE;
+  return amount + SIGNATURE_FEE + priorityLamports + jitoTip + TOKEN_ACCOUNT_RENT + VOLUME_ACCUMULATOR_RENT + topUp;
+}
 
-// A signed transaction ready to record and send.
-type Built = { tx: VersionedTransaction; lastValidBlockHeight: number; route: Trade["route"]; targets: SenderTarget[]; requestId?: string };
+// What one transaction pays besides its amount. jitoTip is 0 unless it goes to Jito.
+type FeePlan = { priorityLamports: bigint; jitoTip: bigint };
+
+// A signed transaction ready to record and send. Jupiter trades carry the order's requestId.
+type Built = { tx: VersionedTransaction; route: "pump" | "jupiter"; lastValidBlockHeight: number | null; targets: SenderTarget[]; requestId?: string };
 
 export type TraderDeps = {
   config: Config;
@@ -56,14 +63,16 @@ export type TraderDeps = {
   wallet: Keypair; // a throwaway key in dry run, so build and sign are still measured
   dryRun: boolean;
   lander: Lander | null; // null in dry run
-  senders: SenderTarget[]; // every configured sender; each trade picks its subset
+  senders: SenderTarget[]; // the RPC URLs and, when configured, Jito
   releaseFire: (fire: Fire) => void; // give a fire back when nothing was sent
 };
 
 export class Trader {
   private readonly d: TraderDeps;
   private readonly signingKey: KeyObject;
-  private readonly inflight = new Set<string>(); // trades this process is still driving
+  private readonly sending = new Set<string>(); // trade ids this process is still sending
+  private readonly reviewLogged = new Set<string>();
+  private reconciling = false;
   private timer: NodeJS.Timeout | null = null;
 
   constructor(d: TraderDeps) {
@@ -75,229 +84,206 @@ export class Trader {
 
   async buy(fire: Fire, trace: Trace): Promise<void> {
     const { rule, mint } = fire;
-    const { book, config, dryRun } = this.d;
-    const now = Date.now();
-    const plan = this.feePlan(rule);
-    const principal = solToLamports(rule.token.amountSol);
-    const feeBudget = this.planCost(plan) + TOKEN_ACCOUNT_RENT + VOLUME_ACCUMULATOR_RENT;
-    const trigger: Trigger = { rule: rule.name, fireKey: fire.fireKey, eventRef: trace.eventRef, postKey: fire.signal?.postKey, actor: fire.actor };
-    const trade = book.reserveBuy({
-      mint,
-      trigger,
-      route: dryRun ? "dry_run" : "pump",
-      maxDebit: principal + feeBudget,
-      feeBudget,
-      caps: config.spend,
-      skipIfAlreadyBought: rule.filters.skipIfAlreadyBought,
-      skipIfAlreadyHolding: rule.filters.skipIfAlreadyHolding,
-      now,
-    });
-    if (typeof trade === "string") return this.drop(fire, trade, trace);
-
-    const pending = runGate(mint, rule, fire.signal, {
-      network: this.d.network,
-      safety: config.safety,
-      pumpBuilder: config.execution.pumpBuilder,
-      solUsd: () => this.d.cache.solUsd,
-      epoch: () => this.d.cache.epoch(),
-    });
-    // setImmediate lets the read go out on the socket first, then uses the wait to derive addresses.
-    setImmediate(() => warmBuyAccounts(mint, this.d.wallet.publicKey));
-    const gate = await pending;
-    trace.gateDoneNs = process.hrtime.bigint();
-    trace.gateMs = gate.elapsedMs;
-    if (!gate.pass) {
-      book.failBeforeSend(trade.id, `${gate.code}: ${gate.detail}`);
-      return this.drop(fire, `${gate.code}: ${gate.detail}`, trace);
+    const { book } = this.d;
+    const busy = book.begin(mint, "buy");
+    if (busy) return this.drop(fire, busy, trace);
+    try {
+      const pending = runGate(mint, rule, fire.signal, {
+        network: this.d.network,
+        safety: this.d.config.safety,
+        solUsd: () => this.d.cache.solUsd,
+        epoch: () => this.d.cache.epoch(),
+      });
+      // setImmediate lets the read go out on the socket first, then uses the wait to derive addresses.
+      setImmediate(() => warmBuyAccounts(mint, this.d.wallet.publicKey));
+      const gate = await pending;
+      trace.gateDoneNs = process.hrtime.bigint();
+      trace.gateMs = gate.elapsedMs;
+      if (!gate.pass) return this.drop(fire, `${gate.code}: ${gate.detail}`, trace);
+      const error = await this.buyPassed(fire, gate, trace);
+      if (error) this.drop(fire, error, trace);
+    } finally {
+      book.end(mint);
     }
-    const sent = await this.attemptBuy(fire, trade, gate, plan, principal, trace, rule.fees.retriesOnGraduation);
-    if (!sent) this.d.releaseFire(fire); // nothing in this fire reached the chain
   }
 
-  // One attempt, and a graduation retry if the curve completed under it. Returns whether any
-  // transaction was sent (a dry run counts as sent); the fire is released only when none was.
-  private async attemptBuy(fire: Fire, trade: Trade, gate: Extract<GateResult, { pass: true }>, plan: FeePlan, principal: bigint, trace: Trace, retries: number): Promise<boolean> {
-    const { book, dryRun } = this.d;
+  // Returns why nothing was sent, or null when a trade was recorded (sent, or a dry run).
+  private async buyPassed(fire: Fire, gate: Extract<GateResult, { pass: true }>, trace: Trace): Promise<string | null> {
     const { rule, mint } = fire;
-    if (dryRun && gate.route === "jupiter") {
-      // A Jupiter order needs a funded taker, so the dry run stops before building.
-      log("dry run", `${rule.name}: would buy ${short(mint)} for ${rule.token.amountSol} SOL through Jupiter /order and /execute${describeFacts(gate)}`);
-      book.confirmDryRun(trade.id, Date.now());
-      book.openPosition({ mint, route: "jupiter", tokenProgram: gate.tokenProgram, openedAt: Date.now(), buyTradeId: trade.id, costLamports: principal.toString(), tokenAmount: null, trigger: trade.trigger });
-      this.d.report.finish(trace, "dry run, not built");
-      return true; // a dry run counts as a trade, so limits behave as they would live
+    const { book, config, dryRun } = this.d;
+    const amount = solToLamports(rule.token.amountSol);
+    const plan = this.feePlan(rule);
+    const reservation =
+      gate.route === "pump" && gate.curve
+        ? pumpBuyReservation(amount, plan.priorityLamports, plan.jitoTip, gate.curve.dataLength)
+        : amount + SIGNATURE_FEE + TOKEN_ACCOUNT_RENT + solToLamports(config.execution.maxAutoPriorityFeeSol);
+    const trigger: Trigger = { eventRef: trace.eventRef, ...(fire.signal?.postKey ? { postKey: fire.signal.postKey } : {}) };
+    const id = book.newTradeId(Date.now());
+    const entry = { mint, route: gate.route, reservedLamports: reservation.toString(), amountLamports: amount.toString(), rule: rule.name, trigger, tokenProgram: gate.tokenProgram };
+    const what = `${gate.route} buy of ${short(mint)} for ${rule.token.amountSol} SOL${describeFacts(gate)}`;
+
+    if (dryRun) {
+      // A Jupiter order needs a funded taker, so a dry run builds only pump.fun buys.
+      let tokens: bigint | null = null;
+      if (gate.route === "pump" && gate.curve) {
+        const built = this.buildPumpBuy(rule, mint, amount, gate.curve, gate.tokenProgram, plan);
+        trace.signedNs = process.hrtime.bigint();
+        tokens = tokensForLamports(gate.curve, amount, curveFeeBps(this.feeTiers(), gate.curve));
+        log("dry run", `${rule.name}: would send a signed ${built.tx.serialize().length}-byte ${what}`);
+      } else {
+        log("dry run", `${rule.name}: would buy through Jupiter /order and /execute: ${what}`);
+      }
+      const refused = book.recordDryRunBuy(id, entry, tokens, config.spend, Date.now());
+      if (refused) return refused;
+      this.d.report.finish(trace, "dry run, not sent");
+      return null;
     }
+
     let built: Built;
     try {
-      built = await this.buildBuy(rule, mint, principal, gate, plan);
+      built = gate.route === "pump" && gate.curve ? this.buildPumpBuy(rule, mint, amount, gate.curve, gate.tokenProgram, plan) : await this.buildJupiter(WSOL, mint, amount);
+      if (built.route === "jupiter") await this.checkSimulatedDebit(built.tx, reservation);
     } catch (error) {
-      book.failBeforeSend(trade.id, `build failed: ${(error as Error).message}`);
-      log("skip", `${rule.name} ${short(mint)}: build failed: ${(error as Error).message}`);
-      this.d.report.finish(trace, "build failed, nothing sent");
-      return false;
+      return `not sent: ${(error as Error).message}`;
     }
     trace.signedNs = process.hrtime.bigint();
-    const what = `${built.route} buy of ${short(mint)} for ${rule.token.amountSol} SOL${describeFacts(gate)}`;
-    if (dryRun) {
-      log("dry run", `${rule.name}: would send a signed ${built.tx.serialize().length}-byte ${what}`);
-      const intents = book.confirmDryRun(trade.id, Date.now());
-      const tokens = gate.curve && this.d.cache.feeTiers ? tokensForLamports(gate.curve, principal, curveFeeBps(this.d.cache.feeTiers, gate.curve)) : null;
-      book.openPosition({ mint, route: gate.route === "jupiter" ? "jupiter" : "pump", tokenProgram: gate.tokenProgram, openedAt: Date.now(), buyTradeId: trade.id, costLamports: principal.toString(), tokenAmount: tokens?.toString() ?? null, trigger: trade.trigger });
-      this.d.report.finish(trace, "dry run, not sent");
-      await this.runIntents(mint, intents);
-      return true; // a dry run counts as a trade, so limits behave as they would live
-    }
-
-    const outcome = await this.sendRecorded(trade, built, trace);
-    if (outcome === null) return false; // the pre-send write failed; nothing went out
-    log("send", `${rule.name}: ${what}, ${built.tx.signatures[0] ? bs58.encode(built.tx.signatures[0]) : ""} -> ${outcome.kind}`);
-    const intents = book.resolve(trade.id, outcome, Date.now());
+    const outcome = await this.send(id, { ...entry, side: "buy" }, built, trace);
+    if (typeof outcome === "string") return outcome;
+    log("send", `${rule.name}: ${what} -> ${outcome.kind}`);
+    book.resolve(id, outcome, Date.now());
     this.d.report.finish(trace, `buy ${outcome.kind}${"error" in outcome ? `: ${outcome.error}` : ""}`);
-    if (outcome.kind === "landed") {
-      book.openPosition({ mint, route: built.route === "jupiter" ? "jupiter" : "pump", tokenProgram: gate.tokenProgram, openedAt: Date.now(), buyTradeId: trade.id, costLamports: principal.toString(), tokenAmount: outcome.tokenAmount?.toString() ?? null, trigger: trade.trigger });
-      await this.runIntents(mint, intents);
-    } else if (outcome.kind === "failed" && built.route === "pump" && retries > 0 && (await this.graduated(mint))) {
-      // The coin left the curve while the buy was in flight. Same fire, a new trade via Jupiter.
-      log("retry", `${short(mint)} graduated during the buy; retrying through Jupiter`);
-      const retry = book.reserveBuy({ mint, trigger: trade.trigger, route: "jupiter", maxDebit: BigInt(trade.reservedLamports), feeBudget: BigInt(trade.feeBudgetLamports), caps: this.d.config.spend, skipIfAlreadyBought: true, skipIfAlreadyHolding: true, now: Date.now() });
-      if (typeof retry !== "string") await this.attemptBuy(fire, retry, { ...gate, route: "jupiter", curve: null }, plan, principal, { ...trace }, retries - 1);
-    }
-    return true;
+    return null;
   }
 
-  private async graduated(mint: string): Promise<boolean> {
-    const [account] = await this.d.network.getAccounts([bondingCurveAddress(mint).toBase58()]).catch(() => [null]);
-    return parseCurve(account?.data ?? new Uint8Array())?.complete ?? false;
-  }
-
-  private async buildBuy(rule: Rule, mint: string, lamports: bigint, gate: Extract<GateResult, { pass: true }>, plan: FeePlan): Promise<Built> {
-    const { wallet, cache, network } = this.d;
-    const tiers = cache.feeTiers;
-    if (gate.route === "pump" && tiers && gate.curve) {
-      const tokens = tokensForLamports(gate.curve, lamports, curveFeeBps(tiers, gate.curve));
-      const minOut = withSlippage(tokens, rule.fees.slippagePct);
-      return this.compileLocal(rule, plan, buyInstructions(wallet.publicKey, new PublicKey(mint), new PublicKey(gate.tokenProgram), lamports, minOut));
-    }
-    if (gate.route !== "jupiter") {
-      const priorityFee = Number(plan.priorityLamports) / 1e9;
-      const bytes = await network.pumpPortalTx({ publicKey: wallet.publicKey.toBase58(), action: "buy", mint, amount: Number(lamports) / 1e9, denominatedInSol: "true", slippage: rule.fees.slippagePct, priorityFee, pool: "auto" });
-      return this.adoptPumpPortal(rule, plan, bytes);
-    }
-    return this.jupiterBuilt(WSOL, mint, lamports);
+  // Jupiter offers no fee ceiling, so its transaction is simulated once: the wallet's balance drop
+  // plus the fees the message declares must fit the reservation.
+  private async checkSimulatedDebit(tx: VersionedTransaction, reservation: bigint): Promise<void> {
+    const wallet = this.d.wallet.publicKey.toBase58();
+    const [before, sim] = await Promise.all([this.d.network.balance(wallet), this.d.network.simulate(Buffer.from(tx.serialize()).toString("base64"), wallet)]);
+    if (sim.err || sim.walletLamportsAfter === null) throw new Error(`simulation failed: ${JSON.stringify(sim.err ?? "no wallet balance in the result")}`);
+    const debit = before - sim.walletLamportsAfter + messageFees(tx);
+    if (debit > reservation) throw new Error(`the simulated debit of ${debit} lamports is above the reservation of ${reservation}`);
   }
 
   // ---- sell ----
 
-  // "no_position" when there is nothing to sell; "busy" while an earlier sell is unresolved.
-  async sell(mint: string, reason: string): Promise<"sold" | "sent" | "no_position" | "busy" | "not_sent"> {
-    const { book, dryRun, network, config, wallet, cache } = this.d;
-    const position = book.position(mint);
-    if (!position) return "no_position";
-    const trade = book.reserveSell(mint, position.trigger, dryRun ? "dry_run" : "pump", Date.now());
-    if (typeof trade === "string") {
-      log("exit", `${short(mint)}: not selling now (${trade})`);
-      return trade === "no position" ? "no_position" : "busy";
-    }
-    if (dryRun) {
-      log("dry run", `would sell ${short(mint)} (${reason})`);
-      book.confirmDryRun(trade.id, Date.now());
-      return "sold";
-    }
-    const trace: Trace = { mint, rule: `exit:${reason}`, connection: "-", eventRef: reason, publishedAtWall: null, receivedWall: Date.now(), receivedNs: process.hrtime.bigint() };
-    trace.decidedNs = trace.receivedNs;
-    let built: Built;
+  // Sells the whole position. Exits stay on the position until a sell confirms, so a sell that
+  // fails or is not sent is tried again by the reconciler.
+  async sell(mint: string, reason: string): Promise<void> {
+    const { book, dryRun, network, config, wallet } = this.d;
+    const busy = book.begin(mint, "sell");
+    if (busy) return log("exit", `${short(mint)}: not selling now (${busy})`);
     try {
-      const tokens = position.tokenAmount !== null ? BigInt(position.tokenAmount) : await network.tokenBalance(wallet.publicKey.toBase58(), mint);
-      if (tokens <= 0n) throw new Error("token balance not known yet");
-      const rule = config.rules.find((r) => r.name === position.trigger.rule) ?? config.rules[0]!;
-      const plan = this.feePlan(rule);
-      const [account] = await network.getAccounts([bondingCurveAddress(mint).toBase58()]);
-      const curve = account ? parseCurve(account.data) : null;
-      if (curve && !localBuildBlocker(curve) && config.execution.pumpBuilder === "local" && cache.feeTiers) {
-        const minOut = withSlippage(lamportsForTokens(curve, tokens, curveFeeBps(cache.feeTiers, curve)), config.exits.sellSlippagePct);
-        built = this.compileLocal(rule, plan, [sellInstruction(wallet.publicKey, new PublicKey(mint), new PublicKey(position.tokenProgram), tokens, minOut)]);
-      } else if (curve && !curve.complete) {
-        const bytes = await network.pumpPortalTx({ publicKey: wallet.publicKey.toBase58(), action: "sell", mint, amount: "100%", denominatedInSol: "false", slippage: config.exits.sellSlippagePct, priorityFee: Number(plan.priorityLamports) / 1e9, pool: "auto" });
-        built = this.adoptPumpPortal(rule, plan, bytes);
-      } else {
-        built = await this.jupiterBuilt(mint, WSOL, tokens);
+      const position = book.position(mint)!;
+      if (dryRun) {
+        log("dry run", `would sell ${short(mint)} (${reason})`);
+        return book.recordDryRunSell(mint);
       }
-    } catch (error) {
-      book.failBeforeSend(trade.id, (error as Error).message);
-      log("exit", `${short(mint)}: sell not sent: ${(error as Error).message}`);
-      return "not_sent";
+      const trace: Trace = { mint, rule: `exit:${reason}`, connection: "-", eventRef: reason, publishedAtWall: null, receivedWall: Date.now(), receivedNs: process.hrtime.bigint() };
+      trace.decidedNs = trace.receivedNs;
+      let built: Built;
+      try {
+        const tokens = BigInt(position.tokenAmount ?? "0");
+        if (tokens <= 0n) throw new Error("token balance not known yet");
+        const rule = config.rules.find((r) => r.name === position.rule) ?? config.rules[0]!;
+        const [account] = await network.getAccounts([bondingCurveAddress(mint).toBase58()]);
+        const curve = account ? parseCurve(account.data) : null;
+        if (curve && !curve.complete && !unsupportedCurve(curve)) {
+          const minOut = withSlippage(lamportsForTokens(curve, tokens, curveFeeBps(this.feeTiers(), curve)), config.exits.sellSlippagePct);
+          built = this.compileLocal(rule, this.feePlan(rule), [sellInstruction(wallet.publicKey, new PublicKey(mint), new PublicKey(position.tokenProgram), tokens, minOut)]);
+        } else {
+          built = await this.buildJupiter(mint, WSOL, tokens);
+        }
+      } catch (error) {
+        return log("exit", `${short(mint)}: sell not sent: ${(error as Error).message}`);
+      }
+      trace.signedNs = process.hrtime.bigint();
+      const id = book.newTradeId(Date.now());
+      const entry = { side: "sell" as const, mint, route: built.route, reservedLamports: "0", amountLamports: "0", rule: position.rule, trigger: position.trigger, tokenProgram: position.tokenProgram };
+      const outcome = await this.send(id, entry, built, trace);
+      if (typeof outcome === "string") return log("exit", `${short(mint)}: sell ${outcome}`);
+      log("send", `sell of ${short(mint)} (${reason}) -> ${outcome.kind}`);
+      book.resolve(id, outcome, Date.now());
+      this.d.report.finish(trace, `sell ${outcome.kind}${"error" in outcome ? `: ${outcome.error}` : ""}`);
+    } finally {
+      book.end(mint);
     }
-    trace.signedNs = process.hrtime.bigint();
-    const outcome = await this.sendRecorded(trade, built, trace);
-    if (outcome === null) return "not_sent";
-    book.resolve(trade.id, outcome, Date.now());
-    this.d.report.finish(trace, `sell ${outcome.kind}${"error" in outcome ? `: ${outcome.error}` : ""}`);
-    return outcome.kind === "landed" ? "sold" : "sent";
   }
 
-  // An exit for a mint: sold now if there is a position, kept on the buy if the buy is pending.
-  async exit(mint: string, code: string, detail: string): Promise<void> {
-    const where = this.d.book.addExitIntent(mint, code, detail, Date.now());
-    if (where === "pending") log("exit", `${short(mint)}: ${code} recorded on the pending buy; it sells when the buy lands`);
-    if (where === "position") await this.sell(mint, code);
+  // A delete of the post a position was bought on. Kept on the position until a sell confirms.
+  async exit(mint: string, code: string): Promise<void> {
+    if (this.d.book.addExit(mint, { code, at: Date.now() })) await this.sellIfExiting(mint);
   }
 
-  private async runIntents(mint: string, intents: Trade["exitIntents"]): Promise<void> {
-    if (intents.length) await this.sell(mint, intents.map((i) => i.code).join(", "));
+  // Sells a position that has exits waiting, reading its balance first when it is not known.
+  private async sellIfExiting(mint: string): Promise<void> {
+    const { book, network, wallet, dryRun } = this.d;
+    const position = book.position(mint);
+    if (!position?.pendingExits.length) return;
+    if (position.tokenAmount === null && !dryRun) {
+      book.setTokenAmount(mint, await network.tokenBalance(wallet.publicKey.toBase58(), mint).catch(() => 0n));
+      if (book.position(mint)?.tokenAmount === null) return log("exit", `${short(mint)}: waiting for the token balance before selling`);
+    }
+    await this.sell(mint, position.pendingExits.map((e) => e.code).join(", "));
   }
 
   // ---- sending ----
 
-  // Writes "sending" (signature, validity window, signed bytes) to disk before anything goes out.
-  // Returns null, with the trade failed and nothing sent, when that write fails.
-  private async sendRecorded(trade: Trade, built: Built, trace: Trace): Promise<Outcome | null> {
-    const signature = bs58.encode(built.tx.signatures[0]!);
-    const base64 = Buffer.from(built.tx.serialize()).toString("base64");
+  // Writes the pending trade (signature, blockhash, validity, the spend reservation for a buy)
+  // before anything goes out. Returns why nothing was sent when the spend caps refuse it or the
+  // write fails.
+  private async send(id: string, entry: Omit<Pending, "signature" | "blockhash" | "lastValidBlockHeight" | "sentAt">, built: Built, trace: Trace): Promise<Outcome | string> {
+    const first = built.tx.signatures[0];
+    const signature = first && first.some((b) => b !== 0) ? bs58.encode(first) : null;
+    const now = Date.now();
+    const pending: Pending = { ...entry, signature, blockhash: built.tx.message.recentBlockhash, lastValidBlockHeight: built.lastValidBlockHeight, sentAt: now };
+    let refused: string | null;
     try {
-      this.d.book.markSending(trade.id, { signature, lastValidBlockHeight: built.lastValidBlockHeight, tx: base64, route: built.route, senders: built.targets.map((t) => t.name) }, Date.now());
+      refused = this.d.book.recordPending(id, pending, this.d.config.spend, now);
     } catch (error) {
-      this.d.book.failBeforeSend(trade.id, `state write failed, not sent: ${(error as Error).message}`);
-      log("error", `${short(trade.mint)}: state write failed, transaction not sent: ${(error as Error).message}`);
-      return null;
+      log("error", `${short(entry.mint)}: state write failed, transaction not sent: ${(error as Error).message}`);
+      return `not sent: state write failed`;
     }
-    this.inflight.add(trade.id);
+    if (refused) return refused;
+    this.sending.add(id);
     try {
-      return built.requestId !== undefined ? await this.jupiterExecute(built, base64, trace) : await this.landLocal(built, trace);
+      return built.requestId !== undefined ? await this.jupiterExecute(built, trace) : await this.landLocal(built, trace);
     } finally {
-      this.inflight.delete(trade.id);
+      this.sending.delete(id);
     }
   }
 
   private async landLocal(built: Built, trace: Trace): Promise<Outcome> {
-    if (!built.targets.length) return { kind: "unknown", error: "no sender can take this transaction" };
-    const landing = await this.d.lander!.land(built.tx, built.lastValidBlockHeight, built.targets);
+    const landing = await this.d.lander!.land(built.tx, built.lastValidBlockHeight!, built.targets);
     Object.assign(trace, { sentNs: landing.sentNs, firstAckNs: landing.firstAckNs, firstAckBy: landing.firstAckBy, confirmedNs: landing.confirmedNs });
     if (landing.status === "unknown") return { kind: "unknown", error: landing.error ?? "no confirmation" };
     const spent = await this.debit(landing.signature);
-    return landing.status === "confirmed" ? { kind: "landed", tokenAmount: null, spentLamports: spent } : { kind: "failed", error: landing.error ?? "failed on chain", spentLamports: spent };
+    return landing.status === "confirmed" ? { kind: "landed", spentLamports: spent, tokenAmount: null } : { kind: "failed", error: landing.error ?? "failed on chain", spentLamports: spent };
   }
 
-  // Jupiter lands the transaction itself. Its documented codes: 0 success; -1, -2, -3 and the
-  // -1002..-1004 / -2002..-2004 group reject it before landing; -1000, -2000 "failed to land" and
-  // -1001, -2001 "unknown error" are not proof either way, nor is a timeout or an unreadable answer.
-  private async jupiterExecute(built: Built, base64: string, trace: Trace): Promise<Outcome> {
+  // Jupiter lands the transaction itself; its code maps through shared/trading.json. A timeout or
+  // an unreadable answer proves nothing, so the trade stays pending.
+  private async jupiterExecute(built: Built, trace: Trace): Promise<Outcome> {
     trace.sentNs = process.hrtime.bigint();
     let result;
     try {
-      result = await this.d.network.jupiterExecute(base64, built.requestId!, this.d.config.execution.confirmTimeoutMs);
+      result = await this.d.network.jupiterExecute(Buffer.from(built.tx.serialize()).toString("base64"), built.requestId!, this.d.config.execution.confirmTimeoutMs);
     } catch (error) {
       return { kind: "unknown", error: (error as Error).message };
     }
     trace.firstAckNs = trace.confirmedNs = process.hrtime.bigint();
     trace.firstAckBy = "jupiter";
-    if (result.status === "Success" && result.code === 0) {
-      const signature = result.signature ?? bs58.encode(built.tx.signatures[0]!);
-      const tokens = result.totalOutputAmount ? BigInt(result.totalOutputAmount) : null;
-      return { kind: "landed", tokenAmount: built.route === "jupiter" && tokens !== null ? tokens : null, spentLamports: await this.debit(signature), signature };
+    const detail = `Jupiter code ${result.code}${result.error ? `: ${result.error}` : ""}`;
+    switch (jupiterOutcome(result.code)) {
+      case "landed": {
+        const tokens = result.totalOutputAmount ? BigInt(result.totalOutputAmount) : null;
+        return { kind: "landed", spentLamports: result.signature ? await this.debit(result.signature) : null, tokenAmount: tokens };
+      }
+      case "rejected":
+        return { kind: "rejected", error: detail };
+      default:
+        return { kind: "unknown", error: detail, signature: result.signature };
     }
-    const rejected = [-1, -2, -3, -1002, -1003, -1004, -2002, -2003, -2004];
-    if (rejected.includes(result.code)) return { kind: "rejected", error: `Jupiter code ${result.code}${result.error ? `: ${result.error}` : ""}` };
-    return { kind: "unknown", error: `Jupiter code ${result.code}${result.error ? `: ${result.error}` : ""}` };
   }
 
   private async debit(signature: string): Promise<bigint | null> {
@@ -306,12 +292,9 @@ export class Trader {
 
   // ---- reconciler ----
 
-  // At startup and every 2 seconds: finish trades whose outcome is not known yet, rebroadcast
-  // the ones still valid, and read token balances that are still missing.
   start(): void {
-    for (const t of this.d.book.recoverAfterRestart()) log("state", `trade ${t.id} (${t.side} ${short(t.mint)}) was never sent; released`);
-    const tick = () => this.reconcile().catch((e: Error) => log("reconcile", e.message));
-    void tick();
+    const tick = () => void this.reconcile().catch((e: Error) => log("reconcile", e.message));
+    tick();
     this.timer = setInterval(tick, 2_000);
   }
 
@@ -319,39 +302,55 @@ export class Trader {
     if (this.timer) clearInterval(this.timer);
   }
 
+  // Finishes pending trades, reads missing balances, and sells positions with exits waiting. A call
+  // while another runs returns at once, so slow RPC answers never pile up.
   async reconcile(): Promise<void> {
-    const { book, network, cache } = this.d;
-    for (const trade of book.unresolved()) {
-      if (this.inflight.has(trade.id) || !trade.signature) continue;
-      const status = await network.signatureStatus(trade.signature).catch(() => undefined);
-      if (status === undefined) continue; // RPC unreachable: try again next tick
-      const height = cache.blockHeight();
+    if (this.reconciling) return;
+    this.reconciling = true;
+    try {
+      await this.resolvePending();
+      for (const [mint, p] of this.d.book.positions()) {
+        if (p.tokenAmount !== null) continue;
+        this.d.book.setTokenAmount(mint, await this.d.network.tokenBalance(this.d.wallet.publicKey.toBase58(), mint).catch(() => 0n));
+      }
+      for (const mint of this.d.book.positionsToExit()) await this.sellIfExiting(mint);
+    } finally {
+      this.reconciling = false;
+    }
+  }
+
+  // A confirmed signature resolves a trade. One the RPC has never seen expires only once its
+  // blockhash is proven invalid; until then it may still land.
+  private async resolvePending(): Promise<void> {
+    const { book, network } = this.d;
+    for (const [id, p] of book.pending()) {
+      if (this.sending.has(id)) continue;
+      if (p.signature === null) {
+        if (!this.reviewLogged.has(id)) log("reconcile", `${p.side} ${short(p.mint)} (trade ${id}): Jupiter returned no signature. Check the wallet's history, then remove the trade from "pending" in the state file.`);
+        this.reviewLogged.add(id);
+        continue;
+      }
+      const status = await network.signatureStatus(p.signature).catch(() => undefined);
       let outcome: Outcome | null = null;
       if (status?.confirmed) {
-        const spent = await this.debit(trade.signature);
-        outcome = status.err ? { kind: "failed", error: JSON.stringify(status.err), spentLamports: spent } : { kind: "landed", tokenAmount: null, spentLamports: spent };
-      } else if (!status && height !== null && trade.lastValidBlockHeight !== undefined && height > trade.lastValidBlockHeight) {
+        const spent = await this.debit(p.signature);
+        outcome = status.err ? { kind: "failed", error: JSON.stringify(status.err), spentLamports: spent } : { kind: "landed", spentLamports: spent, tokenAmount: null };
+      } else if (status === null && (await network.isBlockhashValid(p.blockhash).catch(() => true)) === false) {
         outcome = { kind: "expired" };
-      } else if (trade.tx && this.d.lander) {
-        await this.d.lander.rebroadcast(trade.tx, this.d.senders.filter((s) => trade.senders?.includes(s.name)));
       }
       if (!outcome) continue;
-      const intents = book.resolve(trade.id, outcome, Date.now());
-      log("reconcile", `${trade.side} ${short(trade.mint)} ${trade.signature.slice(0, 8)}: ${outcome.kind}`);
-      if (trade.side === "buy" && outcome.kind === "landed") {
-        const [mintAccount] = await network.getAccounts([trade.mint]).catch(() => [null]);
-        book.openPosition({ mint: trade.mint, route: trade.route === "jupiter" ? "jupiter" : "pump", tokenProgram: mintAccount?.owner ?? "", openedAt: Date.now(), buyTradeId: trade.id, costLamports: (BigInt(trade.reservedLamports) - BigInt(trade.feeBudgetLamports)).toString(), tokenAmount: null, trigger: trade.trigger });
-        await this.runIntents(trade.mint, intents);
-      }
-    }
-    // A balance read right after a buy can still show 0 at the RPC; keep asking until it is positive.
-    for (const p of book.positions().filter((p) => p.tokenAmount === null)) {
-      const balance = await network.tokenBalance(this.d.wallet.publicKey.toBase58(), p.mint).catch(() => 0n);
-      if (balance > 0n) book.setTokenAmount(p.mint, balance);
+      book.resolve(id, outcome, Date.now());
+      log("reconcile", `${p.side} ${short(p.mint)} ${p.signature.slice(0, 8)}: ${outcome.kind}`);
     }
   }
 
   // ---- building blocks ----
+
+  private feeTiers() {
+    const tiers = this.d.cache.feeTiers();
+    if (!tiers) throw new Error("pump.fun fee tiers not loaded yet");
+    return tiers;
+  }
 
   private feePlan(rule: Rule): FeePlan {
     const { cache, config } = this.d;
@@ -359,81 +358,43 @@ export class Trader {
     const fee = rule.fees.priorityFeeSol;
     const estimate = cache.priorityMicroLamports === null ? 0n : (BigInt(cache.priorityMicroLamports) * units) / 1_000_000n;
     const priorityLamports = fee === "auto" ? min(estimate, solToLamports(config.execution.maxAutoPriorityFeeSol)) : solToLamports(fee);
-    const jitoUsable = rule.fees.antiMev && this.d.senders.some((s) => s.kind === "jito");
+    if (!rule.fees.antiMev) return { priorityLamports, jitoTip: 0n };
     const tipSol = rule.fees.tipSol === "auto" ? Math.min(cache.tipFloorSol ?? 0, config.execution.maxAutoTipSol) : rule.fees.tipSol;
-    const jitoTip = jitoUsable ? max(solToLamports(tipSol), JITO_MIN_TIP) : 0n;
-    // With antiMev the transaction goes only to Jito, so other senders' tips are not paid.
-    const senderTips = rule.fees.antiMev
-      ? []
-      : config.senders.filter((s) => s.tipAccounts.length && s.tipSol > 0).map((s) => ({ name: s.name, account: new PublicKey(pick(s.tipAccounts)), lamports: solToLamports(s.tipSol) }));
-    return { priorityLamports, jitoTip, senderTips };
+    return { priorityLamports, jitoTip: max(solToLamports(tipSol), JITO_MIN_TIP) };
   }
 
-  private planCost(plan: FeePlan): bigint {
-    return SIGNATURE_FEE + plan.priorityLamports + plan.jitoTip + plan.senderTips.reduce((sum, t) => sum + t.lamports, 0n);
+  private buildPumpBuy(rule: Rule, mint: string, amount: bigint, curve: Curve, tokenProgram: string, plan: FeePlan): Built {
+    const minOut = withSlippage(tokensForLamports(curve, amount, curveFeeBps(this.feeTiers(), curve)), rule.fees.slippagePct);
+    return this.compileLocal(rule, plan, buyInstructions(this.d.wallet.publicKey, new PublicKey(mint), new PublicKey(tokenProgram), amount, minOut));
   }
 
-  // antiMev: Jito only, and only when the transaction carries its tip. Otherwise every RPC, plus
-  // each tip-requiring sender whose tip the transaction carries.
-  private targetsFor(rule: Rule, plan: FeePlan, tipped: boolean): SenderTarget[] {
-    if (rule.fees.antiMev) return tipped && plan.jitoTip > 0n ? this.d.senders.filter((s) => s.kind === "jito") : [];
-    const paid = new Set(tipped ? plan.senderTips.map((t) => t.name) : []);
-    return this.d.senders.filter((s) => s.kind === "rpc" && (!s.needsTip || paid.has(s.name)));
-  }
-
-  private tipInstructions(plan: FeePlan): TransactionInstruction[] {
-    const from = this.d.wallet.publicKey;
-    const tips = plan.jitoTip > 0n ? [SystemProgram.transfer({ fromPubkey: from, toPubkey: pick(JITO_TIP_ACCOUNTS), lamports: plan.jitoTip })] : [];
-    return [...tips, ...plan.senderTips.map((t) => SystemProgram.transfer({ fromPubkey: from, toPubkey: t.account, lamports: t.lamports }))];
-  }
-
-  // Compute budget, the trade, then every tip, so one signed transaction suits every sender.
+  // Compute budget, the trade, then the Jito tip when antiMev is on. With antiMev the transaction
+  // goes only to Jito; otherwise to every RPC URL.
   private compileLocal(rule: Rule, plan: FeePlan, trade: TransactionInstruction[]): Built {
+    const targets = this.d.senders.filter((s) => s.kind === (rule.fees.antiMev ? "jito" : "rpc"));
+    if (!targets.length && !this.d.dryRun) throw new Error(rule.fees.antiMev ? "antiMev is on but JITO_URL is off" : "no RPC URL to send to");
     const hash = this.d.cache.freshBlockhash();
     if (!hash) throw new Error("no fresh blockhash (the background refresh is failing)");
     const units = this.d.config.execution.computeUnitLimit;
+    const payer = this.d.wallet.publicKey;
     const instructions = [
       ComputeBudgetProgram.setComputeUnitLimit({ units }),
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: (plan.priorityLamports * 1_000_000n) / BigInt(units) }),
       ...trade,
-      ...this.tipInstructions(plan),
+      ...(plan.jitoTip > 0n ? [SystemProgram.transfer({ fromPubkey: payer, toPubkey: JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)]!, lamports: plan.jitoTip })] : []),
     ];
-    const message = new TransactionMessage({ payerKey: this.d.wallet.publicKey, recentBlockhash: hash.blockhash, instructions }).compileToV0Message();
-    const tx = new VersionedTransaction(message);
+    const tx = new VersionedTransaction(new TransactionMessage({ payerKey: payer, recentBlockhash: hash.blockhash, instructions }).compileToV0Message());
     this.sign(tx);
-    return { tx, lastValidBlockHeight: hash.lastValidBlockHeight, route: "pump", targets: this.targetsFor(rule, plan, true) };
+    return { tx, route: "pump", lastValidBlockHeight: hash.lastValidBlockHeight, targets };
   }
 
-  // PumpPortal builds the trade. When its message uses no lookup tables we add our tips and our
-  // fresh blockhash, which also gives a known validity window. Otherwise it goes out unchanged, to
-  // senders that need no tip, with a window of 150 blocks from now as an upper bound.
-  private adoptPumpPortal(rule: Rule, plan: FeePlan, bytes: Uint8Array): Built {
-    const original = VersionedTransaction.deserialize(bytes);
-    const hash = this.d.cache.freshBlockhash();
-    if (original.message.addressTableLookups.length === 0 && hash) {
-      const decompiled = TransactionMessage.decompile(original.message);
-      const message = new TransactionMessage({ payerKey: decompiled.payerKey, recentBlockhash: hash.blockhash, instructions: [...decompiled.instructions, ...this.tipInstructions(plan)] }).compileToV0Message();
-      const tx = new VersionedTransaction(message);
-      this.sign(tx);
-      return { tx, lastValidBlockHeight: hash.lastValidBlockHeight, route: "pumpportal", targets: this.targetsFor(rule, plan, true) };
-    }
-    const height = this.d.cache.blockHeight();
-    if (height === null) throw new Error("block height unknown");
-    this.sign(original);
-    return { tx: original, lastValidBlockHeight: height + 150, route: "pumpportal", targets: this.targetsFor(rule, plan, false) };
-  }
-
-  // Jupiter Swap V2 /order with our wallet as taker. Jupiter lands it through /execute, so the
-  // bot's own senders are not used. The order's lastValidBlockHeight is the hard expiry.
-  private async jupiterBuilt(inputMint: string, outputMint: string, amount: bigint): Promise<Built> {
+  // Jupiter Swap V2 /order with our wallet as taker; Jupiter lands it through /execute.
+  private async buildJupiter(inputMint: string, outputMint: string, amount: bigint): Promise<Built> {
     const order = await this.d.network.jupiterOrder({ inputMint, outputMint, amount, taker: this.d.wallet.publicKey.toBase58() });
     if (!order.transaction) throw new Error(`Jupiter /order returned no transaction: ${order.errorMessage ?? "no route"}`);
-    const height = this.d.cache.blockHeight();
-    const lastValid = order.lastValidBlockHeight ?? (height !== null ? height + 150 : null);
-    if (lastValid === null) throw new Error("block height unknown");
     const tx = VersionedTransaction.deserialize(Buffer.from(order.transaction, "base64"));
     this.sign(tx); // JupiterZ quotes add the market maker's signature during /execute
-    return { tx, lastValidBlockHeight: lastValid, route: "jupiter", targets: [], requestId: order.requestId };
+    return { tx, route: "jupiter", lastValidBlockHeight: order.lastValidBlockHeight ?? null, targets: [], requestId: order.requestId };
   }
 
   // Node's native Ed25519 signs in about 75 us; the pure-JS signer in web3.js takes about 400.
@@ -446,6 +407,23 @@ export class Trader {
     log("skip", `${fire.rule.name} ${short(fire.mint)}: ${reason}`);
     this.d.report.finish(trace, `skipped (${reason.split(":")[0]})`);
   }
+}
+
+// The signature fees plus the priority fee a message declares: SetComputeUnitPrice times
+// SetComputeUnitLimit, or 200,000 units per other instruction (at most 1,400,000) without a limit.
+function messageFees(tx: VersionedTransaction): bigint {
+  const m = tx.message;
+  let limit: bigint | null = null;
+  let price = 0n;
+  let others = 0;
+  for (const ix of m.compiledInstructions) {
+    const data = Buffer.from(ix.data);
+    if (m.staticAccountKeys[ix.programIdIndex]?.toBase58() !== COMPUTE_BUDGET) others++;
+    else if (data[0] === 2 && data.length >= 5) limit = BigInt(data.readUInt32LE(1));
+    else if (data[0] === 3 && data.length >= 9) price = data.readBigUInt64LE(1);
+  }
+  const units = limit ?? BigInt(Math.min(1_400_000, 200_000 * others));
+  return SIGNATURE_FEE * BigInt(m.header.numRequiredSignatures) + (price * units + 999_999n) / 1_000_000n;
 }
 
 const min = (a: bigint, b: bigint) => (a < b ? a : b);

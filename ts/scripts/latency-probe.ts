@@ -4,7 +4,6 @@
 
 import WebSocket from "ws";
 import { productLink, readEnv, trialLink } from "../src/setup/env.ts";
-import { loadConfig } from "../src/setup/config.ts";
 import { percentile } from "../src/report/latency.ts";
 
 const env = readEnv();
@@ -76,15 +75,6 @@ for (const url of env.rpcUrls) {
 await timeWs(`rpc websocket ${new URL(env.rpcWsUrl).host}`, env.rpcWsUrl, [], null);
 // Jito allows about one request per second per IP and region by default, so the samples are spaced.
 if (env.jitoUrl) await timeHttp("jito block engine", `${env.jitoUrl}/api/v1/getTipAccounts`, { jsonrpc: "2.0", id: 1, method: "getTipAccounts", params: [] }, 3, 1_100);
-try {
-  const config = loadConfig(env.configPath);
-  for (const s of config.senders) {
-    const url = process.env[s.urlEnv];
-    if (url) await timeHttp(`sender ${s.name}`, url, { jsonrpc: "2.0", id: 1, method: "getHealth" }, 4);
-  }
-} catch {
-  rows.push("senders                      skipped: no readable config.json");
-}
 const key = env.ultraApiKey ?? env.apiKey;
 if (key) await timeWs(`tweetstream ${new URL(env.wsUrl).host}`, env.wsUrl, ["tweetstream.v1", `tweetstream.auth.token.${key}`], '{"op":"auth_ping"}');
 else rows.push(`tweetstream                  skipped: set TWEETSTREAM_API_KEY to measure the feed (${trialLink("cli-latency-probe")})`);

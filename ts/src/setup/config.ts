@@ -22,8 +22,6 @@ type Filters = {
   maxPoolTaxPct: number | null;
   platforms: string[];
   skipSuspiciousPools: boolean;
-  skipIfAlreadyBought: boolean;
-  skipIfAlreadyHolding: boolean;
   onMissingData: "reject" | "allow";
 };
 
@@ -32,7 +30,6 @@ type Fees = {
   priorityFeeSol: number | "auto";
   tipSol: number | "auto";
   antiMev: boolean;
-  retriesOnGraduation: number;
 };
 
 // After defaults every rule carries every field; each mode reads its own.
@@ -58,18 +55,14 @@ export type Rule = {
   calloutKinds: Array<"callout" | "author_update" | "reply" | "repost">;
   maxMultiple: number | null;
   requireCallerPosition: boolean;
-  sellWhenCallerExits: boolean;
   fomoUsers: string[];
   fomoCoins: string[];
   fomoEvents: Array<"thesis" | "token_verified">;
-  sellWhenAuthorExits: boolean;
   useDetectedCa: boolean;
-  token: { mint: string; action: "buy" | "sell"; amountSol: number };
+  token: { mint: string; amountSol: number };
   filters: Filters;
   fees: Fees;
 };
-
-type Sender = { name: string; urlEnv: string; tipAccounts: string[]; tipSol: number };
 
 export type Config = {
   rules: Rule[];
@@ -93,7 +86,6 @@ export type Config = {
     sellSlippagePct: number;
   };
   execution: {
-    pumpBuilder: "local" | "pumpportal";
     computeUnitLimit: number;
     maxAutoPriorityFeeSol: number;
     maxAutoTipSol: number;
@@ -101,7 +93,6 @@ export type Config = {
     rebroadcastMs: number;
     confirmTimeoutMs: number;
   };
-  senders: Sender[];
 };
 
 // rule: the rule's name, or null for top-level fields. field: the dot-separated path inside that
@@ -237,11 +228,6 @@ function checkSemantics(config: Config): Config {
     }
   }
   if (!config.rules.some((r) => r.enabled)) throw new ConfigError('every rule has "enabled": false. Turn one on.', null, "rules");
-  config.senders.forEach((sender, i) =>
-    sender.tipAccounts.forEach((account, j) => {
-      if (!isSolanaAddress(account)) throw new ConfigError(`senders "${sender.name}": tip account "${account}" is not a Solana address.`, null, `senders.${i}.tipAccounts.${j}`);
-    }),
-  );
   return config;
 }
 

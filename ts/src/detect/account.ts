@@ -4,14 +4,14 @@
 import type { AccountCallout, AccountFollow, AccountProfileUpdate, AccountThesis, AccountTokenVerified, ProfileFields, TweetPin } from "../protocol.ts";
 import { normalizeHandle } from "../protocol.ts";
 import { addressesFromUrl, classifyAddress, findAddresses, findAll, type FoundAddress } from "./addresses.ts";
-import { firstPerMint, makeSignal, xActor } from "./post.ts";
+import { accountActor, firstPerMint, makeSignal } from "./post.ts";
 import type { Actor, CalloutActivity, Confidence, FollowActivity, FomoActivity, PinActivity, ProfileActivity, ProfileField } from "./types.ts";
 
 // account/follow and account/unfollow. The target's bio is used only when the payload has it;
 // this example does not call a profile lookup API.
 export function followActivity(d: AccountFollow, op: "follow" | "unfollow", eventRef: string): FollowActivity {
-  const actor = xActor(d.actor);
-  const target: Actor = { namespace: "x", id: d.target.id, handle: normalizeHandle(d.target.handle) };
+  const actor = accountActor(d.actor, "twitter");
+  const target = accountActor(d.target, d.actor.platform ?? "twitter");
   const found = [...findAll(d.target.bio), ...(d.target.websiteUrl ? addressesFromUrl(d.target.websiteUrl) : [])];
   const signals = firstPerMint(
     found.map((f) => makeSignal("follow_bio", f, actor, eventRef, "medium", `in bio of @${target.handle}`)),
@@ -26,7 +26,7 @@ const CA_FIELDS = ["bio", "name", "websiteUrl"] as const;
 // else the value this process saw last for the account. The same baseline decides which fields
 // changed and which addresses are new.
 export function profileActivity(d: AccountProfileUpdate, known: ProfileFields | undefined, eventRef: string): ProfileActivity {
-  const actor = xActor(d.actor);
+  const actor = accountActor(d.actor, "twitter");
   const baseline = (field: ProfileField) => {
     if (d.previous !== undefined && field in d.previous) return { known: true, value: d.previous[field] };
     return { known: known?.[field] !== undefined, value: known?.[field] };
@@ -55,7 +55,7 @@ function fieldAddresses(field: (typeof CA_FIELDS)[number], value: string | null 
 
 // tweet/pin. A pin event means the post was just pinned; read its text and links.
 export function pinActivity(d: TweetPin, postKey: string, eventRef: string): PinActivity {
-  const actor = xActor(d.author);
+  const actor = accountActor(d.author, d.platform ?? "twitter");
   const found = [...(d.tweet?.urls ?? []).flatMap((u) => addressesFromUrl(u.url)), ...findAll(d.tweet?.text ?? d.text)];
   const signals = firstPerMint(found.map((f) => makeSignal("pin", f, actor, eventRef, "high", "in pinned post", { postKey })));
   return { type: "pin", actor, eventRef, signals };

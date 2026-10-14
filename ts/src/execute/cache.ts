@@ -1,22 +1,23 @@
 // Values the buy path needs, refreshed in the background so it never waits for them: the latest
 // blockhash, the current block height and epoch, priority fee and Jito tip levels, the SOL price,
-// and pump.fun's fee tiers. Read by execute/trade.ts, filters/gate.ts, and land/land.ts.
+// and pump.fun's fee tiers. Read by execute/trade.ts, filters/gate.ts, exits/exits.ts, and
+// land/land.ts. A stale value is never used as if it were fresh: see each getter.
 
 import type { Network } from "../network.ts";
 import { FEE_CONFIG, parseFeeConfig, type FeeTier } from "./pump.ts";
 import { log } from "../log.ts";
 
-// A blockhash older than this is not used: the cache has stopped refreshing, and a transaction
-// built on it may already be close to expiry.
-const MAX_BLOCKHASH_AGE_MS = 10_000;
+const BLOCKHASH_MAX_AGE_MS = 10_000;
+const EPOCH_MAX_AGE_MS = 60_000;
+const FEE_TIERS_MAX_AGE_MS = 300_000;
 
 export class ChainCache {
   private blockhash: { blockhash: string; lastValidBlockHeight: number; at: number } | null = null;
   private height: { blockHeight: number; epoch: number; at: number } | null = null;
+  private tiers: { tiers: FeeTier[]; at: number } | null = null;
   priorityMicroLamports: number | null = null; // 75th percentile of recent nonzero fees, per compute unit
   tipFloorSol: number | null = null;
   solUsd: number | null = null;
-  feeTiers: FeeTier[] | null = null;
   private readonly network: Network;
   private readonly timers: NodeJS.Timeout[] = [];
 
@@ -38,7 +39,8 @@ export class ChainCache {
     this.every(30_000, async () => void (this.solUsd = await this.network.solUsdPrice()));
     this.every(60_000, async () => {
       const [account] = await this.network.getAccounts([FEE_CONFIG.toBase58()]);
-      this.feeTiers = account ? parseFeeConfig(account.data) : null;
+      const tiers = account ? parseFeeConfig(account.data) : null;
+      if (tiers) this.tiers = { tiers, at: Date.now() };
     });
   }
 
@@ -48,19 +50,30 @@ export class ChainCache {
 
   // Resolves once every value has had one chance to load, so a fresh start does not build on nothing.
   async ready(): Promise<void> {
-    for (let i = 0; i < 50 && (!this.blockhash || !this.height); i++) await new Promise((r) => setTimeout(r, 100));
+    for (let i = 0; i < 50 && (!this.blockhash || !this.height || !this.tiers); i++) await new Promise((r) => setTimeout(r, 100));
   }
 
+  // An old blockhash means the refresh has stopped; a transaction built on it may be near expiry.
   freshBlockhash(): { blockhash: string; lastValidBlockHeight: number } | null {
-    return this.blockhash && Date.now() - this.blockhash.at <= MAX_BLOCKHASH_AGE_MS ? this.blockhash : null;
+    return this.blockhash && Date.now() - this.blockhash.at <= BLOCKHASH_MAX_AGE_MS ? this.blockhash : null;
   }
 
   blockHeight(): number | null {
     return this.height?.blockHeight ?? null;
   }
 
+  // Null once stale, so the gate charges the higher of a Token-2022 mint's two transfer fees.
   epoch(): number | null {
-    return this.height?.epoch ?? null;
+    return this.height && Date.now() - this.height.at <= EPOCH_MAX_AGE_MS ? this.height.epoch : null;
+  }
+
+  // When stale, the highest tier's fee applies at every market cap: quotes come out lower, so a
+  // minimum-out never assumes a fee cut that may have ended.
+  feeTiers(): FeeTier[] | null {
+    if (!this.tiers) return null;
+    if (Date.now() - this.tiers.at <= FEE_TIERS_MAX_AGE_MS) return this.tiers.tiers;
+    const highest = this.tiers.tiers.reduce((a, b) => (a.protocolBps + a.creatorBps >= b.protocolBps + b.creatorBps ? a : b));
+    return [{ ...highest, threshold: 0n }];
   }
 
   private every(ms: number, task: () => Promise<void>): void {

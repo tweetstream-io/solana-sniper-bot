@@ -11,8 +11,7 @@ import { backoffMs } from "../feed/client.ts";
 
 // Jito's /api/v1/transactions takes only the encoding option and always skips preflight.
 // RPCs get skipPreflight (saves a simulation) and maxRetries 0, because we rebroadcast ourselves.
-// needsTip: a sender that only accepts transactions paying it a tip (configured tipAccounts).
-export type SenderTarget = { name: string; url: string; kind: "rpc" | "jito"; needsTip?: boolean };
+export type SenderTarget = { name: string; url: string; kind: "rpc" | "jito" };
 
 export type Landing = {
   signature: string;
@@ -62,11 +61,6 @@ export class Lander {
       clearInterval(rebroadcast);
     }
     return result;
-  }
-
-  // The reconciler sends a stored transaction again while its blockhash is valid.
-  async rebroadcast(base64: string, targets: SenderTarget[]): Promise<void> {
-    if (targets.length) await this.fanOut(base64, targets).catch(() => {});
   }
 
   // If the subscription never answered (the RPC WebSocket was down), ask once over HTTP.

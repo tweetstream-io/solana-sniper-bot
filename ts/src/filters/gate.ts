@@ -5,9 +5,9 @@
 import type { Config, Rule } from "../setup/config.ts";
 import type { Signal } from "../detect/types.ts";
 import type { MarketSnapshot, Network, RugcheckSummary } from "../network.ts";
-import { bondingCurveAddress, localBuildBlocker, parseCurve, TOKEN_2022_PROGRAM, TOKEN_PROGRAM, type Curve } from "../execute/pump.ts";
+import { bondingCurveAddress, parseCurve, unsupportedCurve, TOKEN_2022_PROGRAM, TOKEN_PROGRAM, type Curve } from "../execute/pump.ts";
 
-export type Venue = "pump" | "pumpportal" | "jupiter";
+export type Venue = "pump" | "jupiter";
 
 export type Facts = {
   platform?: string;
@@ -32,7 +32,8 @@ export type GateCode =
   | "filter_liquidity"
   | "filter_age"
   | "filter_suspicious"
-  | "missing_data";
+  | "missing_data"
+  | "unsupported_curve";
 
 type Verdict =
   | { pass: true; route: Venue; curve: Curve | null; tokenProgram: string; facts: Facts }
@@ -43,7 +44,6 @@ export type GateResult = Verdict & { elapsedMs: number };
 export type GateDeps = {
   network: Network;
   safety: Config["safety"];
-  pumpBuilder: Config["execution"]["pumpBuilder"];
   solUsd: () => number | null; // from execute/cache.ts, refreshed in the background
   epoch: () => number | null; // the current epoch decides which Token-2022 transfer fee applies
 };
@@ -168,11 +168,12 @@ function judge(
     }
     facts.taxPct = transferFeeBps(info.transferFee, deps.epoch()) / 100;
     if (live) {
-      route = localBuildBlocker(curve!) || deps.pumpBuilder === "pumpportal" ? "pumpportal" : "pump";
+      const unsupported = unsupportedCurve(curve!);
+      if (unsupported) return fail("unsupported_curve", unsupported);
+      route = "pump";
       facts.platform = "pumpfun";
       const solUsd = deps.solUsd();
-      // Only a SOL-paired curve can be priced in SOL; other quote mints count as missing data.
-      if (solUsd !== null && curve!.solPaired) {
+      if (solUsd !== null) {
         // Market cap in lamports = price per raw unit (vQuote / vToken) x total raw supply.
         const capLamports = (curve!.virtualQuoteReserves * curve!.tokenTotalSupply) / curve!.virtualTokenReserves;
         facts.marketCapUsd = (Number(capLamports) / 1e9) * solUsd;

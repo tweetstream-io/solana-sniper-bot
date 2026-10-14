@@ -24,8 +24,8 @@ import { LatencyReport, type Trace } from "./report/latency.ts";
 import { ExitWatcher } from "./exits/exits.ts";
 import { log, short } from "./log.ts";
 
-export type ExitCode = "post_deleted" | "caller_exited" | "author_exited";
-type PlannedExit = { mint: string; code: ExitCode; rule: string | null; detail: string };
+// A delete of the post a position was bought on.
+type DeleteExit = { mint: string; code: "post_deleted" };
 
 export type Outcome = {
   duplicate: boolean;
@@ -33,7 +33,7 @@ export type Outcome = {
   signals: Signal[];
   fires: Fire[];
   skips: Skip[];
-  exits: PlannedExit[];
+  exits: DeleteExit[];
   invalid: string | null; // why the payload was skipped, when it was malformed
   publishedAt: number | null; // publish time of a post, for publish -> receipt
   firstContent: boolean; // first tweet/content for this post
@@ -42,9 +42,9 @@ export type Outcome = {
 // The stable JSON shapes compared by shared/fixtures (documented in shared/README.md).
 export type SignalJson = { event: string; source: SignalSource; chain: string; mint: string; confidence: string; actor: { namespace: string; id?: string; handle?: string } };
 export type DecisionJson =
-  | { event: string; rule: string; decision: "fire"; mint: string; action: "buy" | "sell"; source: SignalSource | null }
+  | { event: string; rule: string; decision: "fire"; mint: string; source: SignalSource | null }
   | { event: string; rule: string; decision: "skip"; code: SkipCode }
-  | { event: string; rule?: string; decision: "exit"; mint: string; code: ExitCode };
+  | { event: string; decision: "exit"; mint: string; code: "post_deleted" };
 
 export function signalsJson(o: Outcome): SignalJson[] {
   return o.signals.map((s) => ({
@@ -59,9 +59,9 @@ export function signalsJson(o: Outcome): SignalJson[] {
 
 export function decisionsJson(o: Outcome): DecisionJson[] {
   return [
-    ...o.fires.map((m): DecisionJson => ({ event: o.eventRef, rule: m.rule.name, decision: "fire", mint: m.mint, action: m.rule.token.action, source: m.signal?.source ?? null })),
+    ...o.fires.map((m): DecisionJson => ({ event: o.eventRef, rule: m.rule.name, decision: "fire", mint: m.mint, source: m.signal?.source ?? null })),
     ...o.skips.map((s): DecisionJson => ({ event: o.eventRef, rule: s.rule.name, decision: "skip", code: s.code })),
-    ...o.exits.map((e): DecisionJson => ({ event: o.eventRef, ...(e.rule ? { rule: e.rule } : {}), decision: "exit", mint: e.mint, code: e.code })),
+    ...o.exits.map((e): DecisionJson => ({ event: o.eventRef, decision: "exit", mint: e.mint, code: e.code })),
   ];
 }
 
@@ -116,9 +116,7 @@ export class Decider {
         break;
       case "tweet/delete":
         if (this.config.exits.sellOnDelete) {
-          for (const mint of this.book.exitTargets({ postKey: postKey(event.d as TweetDelete) })) {
-            outcome.exits.push({ mint, code: "post_deleted", rule: null, detail: "the post that triggered the buy was deleted" });
-          }
+          for (const mint of this.book.boughtOnPost(postKey(event.d as TweetDelete))) outcome.exits.push({ mint, code: "post_deleted" });
         }
         break;
       case "account/follow":
@@ -148,12 +146,6 @@ export class Decider {
     const result = this.engine.evaluate(activity, { now: receipt.wallMs, ageMs, knownBio });
     outcome.fires = result.fires;
     outcome.skips = result.skips;
-    // A caller or author exit applies only to what this rule bought because of that account.
-    for (const exit of result.exits) {
-      if (this.book.exitTargets({ rule: exit.rule.name, actor: exit.actor }).includes(exit.mint)) {
-        outcome.exits.push({ mint: exit.mint, code: exit.code, rule: exit.rule.name, detail: exit.detail });
-      }
-    }
     return outcome;
   }
 
@@ -228,21 +220,15 @@ export async function startBot(o: BotOptions): Promise<RunningBot> {
     // Trades start before anything is logged: console output is synchronous and slow.
     for (const fire of outcome.fires) {
       const trace: Trace = { mint: fire.mint, rule: fire.rule.name, connection: receipt.connection, eventRef: outcome.eventRef, publishedAtWall: outcome.publishedAt, receivedWall: receipt.wallMs, receivedNs: receipt.monoNs, decidedNs };
-      const run =
-        fire.rule.token.action === "buy"
-          ? trader.buy(fire, trace)
-          : trader.sell(fire.mint, `rule ${fire.rule.name}`).then((r) => {
-              if (r === "no_position") decider.release(fire); // nothing to sell: the fire is given back
-            });
-      run.catch((error: Error) => log("error", `${fire.rule.name}: ${error.message}`));
+      trader.buy(fire, trace).catch((error: Error) => log("error", `${fire.rule.name}: ${error.message}`));
     }
-    for (const e of outcome.exits) trader.exit(e.mint, e.code, e.detail).catch((error: Error) => log("error", `exit ${short(e.mint)}: ${error.message}`));
+    for (const e of outcome.exits) trader.exit(e.mint, e.code).catch((error: Error) => log("error", `exit ${short(e.mint)}: ${error.message}`));
     report.recordFirstCopy(receipt.connection);
     if (outcome.firstContent && outcome.publishedAt !== null) report.recordPost(receipt.connection, receipt.wallMs - outcome.publishedAt);
     for (const s of outcome.signals) log("signal", `${s.source} ${short(s.mint)} from ${s.actor.handle ? `@${s.actor.handle}` : s.actor.namespace} (${s.eventRef})`);
     for (const s of outcome.skips) log("skip", `${s.rule.name}: ${s.code}, ${s.detail}`);
-    for (const f of outcome.fires) log("fire", `${f.rule.name}: ${f.rule.token.action} ${short(f.mint)}, ${f.detail}`);
-    for (const e of outcome.exits) log("exit", `${short(e.mint)}: ${e.code}, ${e.detail}`);
+    for (const f of outcome.fires) log("fire", `${f.rule.name}: buy ${short(f.mint)}, ${f.detail}`);
+    for (const e of outcome.exits) log("exit", `${short(e.mint)}: the post it was bought on was deleted`);
   };
 
   const feeds = o.feeds.map((f) => new FeedClient({ name: f.name, apiKey: f.apiKey, url: o.wsUrl, heartbeatMs: o.heartbeatMs ?? 30_000, onEvent, onFatal: o.onFatal }));

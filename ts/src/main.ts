@@ -31,14 +31,10 @@ function loadWallet(env: Env): Keypair | null {
   return Keypair.fromSecretKey(bytes);
 }
 
-function senderTargets(env: Env, config: Config): SenderTarget[] {
+// Every RPC URL gets each local transaction; with antiMev only Jito does.
+function senderTargets(env: Env): SenderTarget[] {
   const targets: SenderTarget[] = env.rpcUrls.map((url) => ({ name: new URL(url).host, url, kind: "rpc" as const }));
   if (env.jitoUrl) targets.push({ name: "jito", url: `${env.jitoUrl}/api/v1/transactions`, kind: "jito" });
-  for (const s of config.senders) {
-    const url = process.env[s.urlEnv]?.trim();
-    if (!url) fail(`senders "${s.name}": set ${s.urlEnv} in .env to the sender's URL, or remove the sender from config.json.`);
-    targets.push({ name: s.name, url, kind: "rpc", needsTip: s.tipAccounts.length > 0 && s.tipSol > 0 });
-  }
   return targets;
 }
 
@@ -79,6 +75,7 @@ try {
   if (error instanceof StateError) fail(error.message);
   throw error;
 }
+process.on("exit", () => book.close()); // every exit path, Ctrl+C and fatal errors included
 const bot = await startBot({
   config,
   network,
@@ -87,7 +84,7 @@ const bot = await startBot({
   wsUrl: env.wsUrl,
   dryRun: env.dryRun,
   wallet,
-  senders: senderTargets(env, config), // unused in dry run, but they shape the tips each transaction carries
+  senders: senderTargets(env), // unused in dry run, but they decide whether a Jito tip is paid
   rpcWsUrl: env.rpcWsUrl,
   onFatal: (reason) => {
     bot.stop();

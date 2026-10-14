@@ -6,7 +6,7 @@ import type { Config } from "../setup/config.ts";
 import type { Activity } from "../detect/types.ts";
 import type { TradeBook } from "../execute/trades.ts";
 import type { RuleIndex } from "./index.ts";
-import { MODES, type Exit, type Fire, type Skip } from "./modes.ts";
+import { MODES, type Fire, type Skip } from "./modes.ts";
 
 type EvalContext = {
   now: number;
@@ -29,15 +29,12 @@ export class RuleEngine {
     this.config = config;
   }
 
-  evaluate(activity: Activity, ctx: EvalContext): { fires: Fire[]; skips: Skip[]; exits: Exit[] } {
+  evaluate(activity: Activity, ctx: EvalContext): { fires: Fire[]; skips: Skip[] } {
     const fires: Fire[] = [];
     const skips: Skip[] = [];
-    const exits: Exit[] = [];
     const stale = ctx.ageMs !== null && ctx.ageMs > this.config.maxSignalAgeMs;
     for (const rule of this.index.candidates(activity)) {
-      const results = MODES[rule.mode].match(rule, activity, ctx.knownBio);
-      exits.push(...results.filter((r): r is Exit => r.kind === "exit"));
-      const decisions = results.filter((r) => r.kind !== "exit");
+      const decisions = MODES[rule.mode].match(rule, activity, ctx.knownBio);
       // A late post is reported only to rules it concerns, once per rule.
       if (stale && decisions.length) {
         skips.push({ kind: "skip", rule, code: "stale_post", detail: `post is ${ctx.ageMs} ms old, maxSignalAgeMs is ${this.config.maxSignalAgeMs}` });
@@ -45,14 +42,14 @@ export class RuleEngine {
       }
       for (const r of decisions) {
         if (r.kind === "skip") skips.push(r);
-        else if (r.kind === "fire") this.admit({ ...r, actor: activity.actor }, ctx.now, fires, skips);
+        else this.admit(r, ctx.now, fires, skips);
       }
     }
-    return { fires, skips, exits };
+    return { fires, skips };
   }
 
-  // Undo a fire that sent nothing (filters rejected it, a sell found no position): the rule may
-  // fire again on the same key and gets its snipe back. Called at most once per fire.
+  // Undo a fire that sent nothing (filters or a limit refused it): the rule may fire again on the
+  // same key and gets its snipe back. Called at most once per fire.
   release(fire: Fire): void {
     this.fired.delete(fire.fireKey);
     this.book.releaseSnipe(fire.rule.name);
@@ -67,7 +64,7 @@ export class RuleEngine {
       skips.push({ kind: "skip", rule, code: "cooldown", detail: `${Math.ceil((cooldownMs - (now - last)) / 1000)} s left` });
       return;
     }
-    if (!this.book.reserveSnipe(rule.name, rule.filters.maxSnipes)) {
+    if (!this.book.claimSnipe(rule.name, rule.filters.maxSnipes)) {
       skips.push({ kind: "skip", rule, code: "max_snipes", detail: `maxSnipes ${rule.filters.maxSnipes} reached` });
       return;
     }

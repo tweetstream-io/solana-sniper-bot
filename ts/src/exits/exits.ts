@@ -1,5 +1,6 @@
 // Prices open positions every exits.pollMs and sells on take profit, stop loss, or max hold time.
-// Delete, caller, and author exits come from pipeline.ts through Trader.exit instead.
+// Each exit goes through Trader.exit, like a delete exit from pipeline.ts, and stays on the position
+// until a sell confirms.
 
 import type { Config } from "../setup/config.ts";
 import type { Position, TradeBook } from "../execute/trades.ts";
@@ -27,11 +28,16 @@ export class ExitWatcher {
 
   start(): void {
     this.timer = setInterval(() => {
-      // The trade book allows one sell per position, so overlapping polls cannot double-sell.
-      for (const p of this.book.positions().filter((p) => !p.sellTradeId)) {
-        this.check(p)
-          .then((reason) => (reason ? this.trader.sell(p.mint, reason) : undefined))
-          .catch((error: Error) => log("exits", `${short(p.mint)}: ${error.message}`));
+      // An exit is kept on the position until a sell confirms; the trade book allows one sell at a time.
+      for (const [mint, p] of this.book.positions()) {
+        if (p.pendingExits.length) continue; // already exiting; the reconciler retries the sell
+        this.check(mint, p)
+          .then((exit) => {
+            if (!exit) return;
+            log("exit", `${short(mint)}: ${exit.detail}`);
+            return this.trader.exit(mint, exit.code);
+          })
+          .catch((error: Error) => log("exits", `${short(mint)}: ${error.message}`));
       }
     }, this.config.exits.pollMs);
   }
@@ -40,26 +46,25 @@ export class ExitWatcher {
     if (this.timer) clearInterval(this.timer);
   }
 
-  private async check(p: Position): Promise<string | null> {
+  private async check(mint: string, p: Position): Promise<{ code: string; detail: string } | null> {
     const { takeProfitPct, stopLossPct, maxHoldSec } = this.config.exits;
-    if (maxHoldSec !== null && Date.now() - p.openedAt >= maxHoldSec * 1000) return `held ${maxHoldSec} s`;
+    if (maxHoldSec !== null && Date.now() - p.openedAt >= maxHoldSec * 1000) return { code: "max_hold", detail: `held ${maxHoldSec} s` };
     if (p.tokenAmount === null || (takeProfitPct === null && stopLossPct === null)) return null;
-    const value = await this.valueLamports(p, BigInt(p.tokenAmount));
+    const value = await this.valueLamports(mint, BigInt(p.tokenAmount));
     if (value === null) return null; // no price: wait for the next poll or the time limit
     const pnlPct = (Number(value) / Number(p.costLamports) - 1) * 100;
-    if (takeProfitPct !== null && pnlPct >= takeProfitPct) return `take profit at ${pnlPct.toFixed(1)}%`;
-    if (stopLossPct !== null && pnlPct <= -stopLossPct) return `stop loss at ${pnlPct.toFixed(1)}%`;
+    if (takeProfitPct !== null && pnlPct >= takeProfitPct) return { code: "take_profit", detail: `take profit at ${pnlPct.toFixed(1)}%` };
+    if (stopLossPct !== null && pnlPct <= -stopLossPct) return { code: "stop_loss", detail: `stop loss at ${pnlPct.toFixed(1)}%` };
     return null;
   }
 
-  // A curve position is priced from one account read, after pump.fun's fee; anything else from a
-  // Jupiter quote.
-  private async valueLamports(p: Position, tokens: bigint): Promise<bigint | null> {
-    if (p.route === "pump" && this.cache.feeTiers) {
-      const [account] = await this.network.getAccounts([bondingCurveAddress(p.mint).toBase58()]);
-      const curve = account ? parseCurve(account.data) : null;
-      if (curve && !curve.complete) return lamportsForTokens(curve, tokens, curveFeeBps(this.cache.feeTiers, curve));
-    }
-    return this.network.quoteSellLamports(p.mint, tokens);
+  // A position on a live pump.fun curve is priced from one account read, after pump.fun's fee;
+  // anything else from a Jupiter quote to SOL.
+  private async valueLamports(mint: string, tokens: bigint): Promise<bigint | null> {
+    const tiers = this.cache.feeTiers();
+    const [account] = await this.network.getAccounts([bondingCurveAddress(mint).toBase58()]).catch(() => [null]);
+    const curve = account ? parseCurve(account.data) : null;
+    if (tiers && curve && !curve.complete && curve.solPaired) return lamportsForTokens(curve, tokens, curveFeeBps(tiers, curve));
+    return this.network.quoteSellLamports(mint, tokens).catch(() => null);
   }
 }

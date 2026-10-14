@@ -1,6 +1,6 @@
 // Answers every call the bot makes from a scenario's "chain" block, so the demo, the benchmark, and
 // the trade tests run the real pipeline with no network. Account bytes use the on-chain layouts the
-// bot parses. Signature statuses, debits, and balances start empty; tests fill them to play the chain.
+// bot parses. Signature statuses, debits, token balances, and expired blockhashes start empty; tests fill them to play the chain.
 
 import bs58 from "bs58";
 import { bondingCurveAddress, curveFeeBps, FEE_CONFIG, lamportsForTokens, parseCurve, parseFeeConfig, PUMP_PROGRAM, TOKEN_2022_PROGRAM, TOKEN_PROGRAM } from "../src/execute/pump.ts";
@@ -66,6 +66,9 @@ export class ScenarioNetwork implements Network {
   readonly statuses = new Map<string, { confirmed: boolean; err: unknown }>(); // signature -> status
   readonly debits = new Map<string, bigint>(); // signature -> lamports taken from the wallet
   readonly balances = new Map<string, bigint>(); // mint -> token balance of the wallet
+  readonly expiredBlockhashes = new Set<string>(); // isBlockhashValid answers false for these
+  walletLamports = 10_000_000_000n;
+  simulatedDebit = 0n; // what a simulated transaction takes from the wallet
   blockHeight: number;
   private readonly chain: ScenarioChain;
 
@@ -92,11 +95,17 @@ export class ScenarioNetwork implements Network {
   async signatureStatus(signature: string) {
     return this.statuses.get(signature) ?? null;
   }
+  async isBlockhashValid(blockhash: string) {
+    return !this.expiredBlockhashes.has(blockhash);
+  }
+  async balance() {
+    return this.walletLamports;
+  }
+  async simulate() {
+    return { err: null, walletLamportsAfter: this.walletLamports - this.simulatedDebit };
+  }
   async transactionDebit(signature: string) {
     return this.debits.get(signature) ?? null;
-  }
-  async pumpPortalTx(): Promise<Uint8Array> {
-    throw new Error("the scenario has no PumpPortal");
   }
   async jupiterOrder(_q: Parameters<Network["jupiterOrder"]>[0]): Promise<JupiterOrder> {
     throw new Error("the scenario has no Jupiter route");

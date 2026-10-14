@@ -1,5 +1,5 @@
 // Every call the bot makes to a service except sending a signed transaction: Solana RPC reads,
-// Jupiter quotes, orders and executes, PumpPortal builds, Jito tip levels, DexScreener, Rugcheck.
+// Jupiter quotes, orders and executes, Jito tip levels, DexScreener, Rugcheck.
 // LiveNetwork calls the real services; scripts/scenario-network.ts answers from a scenario file,
 // so the demo, the benchmark, and the trade tests run with no network. land/land.ts sends.
 
@@ -26,10 +26,13 @@ export interface Network {
   epochInfo(): Promise<{ epoch: number; blockHeight: number }>;
   // Status of a sent transaction: null when the RPC has not seen it.
   signatureStatus(signature: string): Promise<{ confirmed: boolean; err: unknown } | null>;
+  // False once a transaction built on this blockhash can no longer land.
+  isBlockhashValid(blockhash: string): Promise<boolean>;
+  balance(owner: string): Promise<bigint>; // lamports
+  // The wallet's lamports after the signed transaction, simulated without landing it.
+  simulate(signedTx: string, wallet: string): Promise<{ err: unknown; walletLamportsAfter: bigint | null }>;
   // How many lamports the transaction took from `owner` (fees, tips, rent, principal). null: not found.
   transactionDebit(signature: string, owner: string): Promise<bigint | null>;
-  // An unsigned transaction from the PumpPortal local trading API.
-  pumpPortalTx(body: Record<string, string | number>): Promise<Uint8Array>;
   jupiterOrder(q: { inputMint: string; outputMint: string; amount: bigint; taker: string }): Promise<JupiterOrder>;
   jupiterExecute(signedTx: string, requestId: string, timeoutMs: number): Promise<JupiterExecute>;
   recentPriorityFees(): Promise<number[]>; // micro-lamports per compute unit, recent slots
@@ -105,16 +108,22 @@ export class LiveNetwork implements Network {
     return i < 0 ? null : BigInt(tx.meta.preBalances[i]! - tx.meta.postBalances[i]!);
   }
 
-  // PumpPortal local trading API (https://pumpportal.fun/local-trading-api/trading-api/).
-  async pumpPortalTx(body: Record<string, string | number>): Promise<Uint8Array> {
-    const response = await fetch("https://pumpportal.fun/api/trade-local", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(5_000),
-    });
-    if (response.status !== 200) throw new Error(`PumpPortal HTTP ${response.status}`);
-    return new Uint8Array(await response.arrayBuffer());
+  // https://solana.com/docs/rpc/http/isblockhashvalid
+  async isBlockhashValid(blockhash: string): Promise<boolean> {
+    return (await rpcCall<{ value: boolean }>(this.rpcUrl, "isBlockhashValid", [blockhash, { commitment: "processed" }])).value;
+  }
+
+  async balance(owner: string): Promise<bigint> {
+    return BigInt((await rpcCall<{ value: number }>(this.rpcUrl, "getBalance", [owner, { commitment: "processed" }])).value);
+  }
+
+  // https://solana.com/docs/rpc/http/simulatetransaction, asking for the wallet account afterwards.
+  async simulate(signedTx: string, wallet: string): Promise<{ err: unknown; walletLamportsAfter: bigint | null }> {
+    type Raw = { value: { err: unknown; accounts: Array<{ lamports: number } | null> | null } };
+    const params = { encoding: "base64", sigVerify: false, commitment: "processed", accounts: { encoding: "base64", addresses: [wallet] } };
+    const { value } = await rpcCall<Raw>(this.rpcUrl, "simulateTransaction", [signedTx, params]);
+    const after = value.accounts?.[0];
+    return { err: value.err, walletLamportsAfter: after ? BigInt(after.lamports) : null };
   }
 
   async jupiterOrder(q: { inputMint: string; outputMint: string; amount: bigint; taker: string }): Promise<JupiterOrder> {

@@ -84,6 +84,7 @@ export type Curve = {
   mayhem: boolean;
   cashback: boolean;
   solPaired: boolean; // quote_mint is the default key, which means SOL
+  dataLength: number; // older curves are shorter; a buy pays rent to extend them to 115 bytes
 };
 
 export function parseCurve(data: Uint8Array): Curve | null {
@@ -100,13 +101,14 @@ export function parseCurve(data: Uint8Array): Curve | null {
     mayhem: data.length > 81 && data[81] === 1,
     cashback: data.length > 82 && data[82] === 1,
     solPaired: quoteMint === null || quoteMint.every((b) => b === 0),
+    dataLength: data.length,
   };
 }
 
-// The local builder handles live, SOL-paired curves. Cashback coins reject v3 trades (error 6094).
-export function localBuildBlocker(curve: Curve): string | null {
-  if (curve.complete) return "bonding curve is complete (graduated)";
-  if (!curve.solPaired) return "curve is not SOL-paired";
+// Why the local builder cannot trade a live curve, or null. Cashback coins reject v3 trades
+// (error 6094).
+export function unsupportedCurve(curve: Curve): string | null {
+  if (!curve.solPaired) return "the curve is quoted in a token other than SOL";
   if (curve.cashback) return "cashback coin: v3 trades are not supported";
   return null;
 }

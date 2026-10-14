@@ -46,8 +46,8 @@ export type SkipCode =
   | "cooldown"
   | "max_snipes";
 
-// What a matcher returns when its rule fires. The engine adds the acting account to make a Fire.
-type Hit = {
+// A rule that fired.
+export type Fire = {
   kind: "fire";
   rule: Rule;
   mint: string;
@@ -55,12 +55,8 @@ type Hit = {
   detail: string;
   fireKey: string; // a rule fires once per key: per post, per account event, or per mint
 };
-// A rule that fired. `actor` is who triggered it, kept on the position for caller and author exits.
-export type Fire = Hit & { actor: Actor };
 export type Skip = { kind: "skip"; rule: Rule; code: SkipCode; detail: string };
-// Sell a position this rule bought, because the account it followed has left the trade.
-export type Exit = { kind: "exit"; rule: Rule; mint: string; actor: Actor; code: "caller_exited" | "author_exited"; detail: string };
-type Result = Hit | Skip | null;
+type Result = Fire | Skip | null;
 
 const RANK: Record<Confidence, number> = { low: 0, medium: 1, high: 2 };
 
@@ -88,7 +84,7 @@ function keywordSkip(rule: Rule, texts: string[][]): Skip | null {
 }
 
 // The configured mint, or with useDetectedCa the first Solana address the event carried.
-function pickMint(rule: Rule, signals: Signal[], detail: string, fireKey: string): Hit | Skip {
+function pickMint(rule: Rule, signals: Signal[], detail: string, fireKey: string): Fire | Skip {
   if (rule.token.mint) return { kind: "fire", rule, mint: rule.token.mint, signal: null, detail, fireKey };
   const signal = signals.find((s) => s.chain === "solana");
   if (signal) return { kind: "fire", rule, mint: signal.mint, signal, detail: `${detail}, CA from ${signal.source}`, fireKey };
@@ -99,7 +95,7 @@ function pickMint(rule: Rule, signals: Signal[], detail: string, fireKey: string
 }
 
 // The token the event names, limited to token.mint when the rule sets one.
-function eventToken(rule: Rule, signals: Signal[], detail: string): Hit | Skip | null {
+function eventToken(rule: Rule, signals: Signal[], detail: string): Fire | Skip | null {
   const signal = signals[0];
   if (!signal) return skip(rule, "no_contract_address", `${detail}: the token address is not a valid Solana or EVM address`);
   if (rule.token.mint && signal.mint !== rule.token.mint) return null;
@@ -108,8 +104,8 @@ function eventToken(rule: Rule, signals: Signal[], detail: string): Hit | Skip |
 }
 
 // Mode 1: trade contract addresses the watched accounts post.
-function matchCaScanner(rule: Rule, activity: Activity, knownBio: string | undefined): Array<Hit | Skip> {
-  const out: Array<Hit | Skip> = [];
+function matchCaScanner(rule: Rule, activity: Activity, knownBio: string | undefined): Array<Fire | Skip> {
+  const out: Array<Fire | Skip> = [];
   for (const s of activity.signals) {
     if (!(rule.sources as string[]).includes(s.source)) continue;
     if (rule.token.mint && s.mint !== rule.token.mint) continue;
@@ -170,13 +166,9 @@ function matchPfp(rule: Rule, a: ProfileActivity): Result {
 }
 
 // Mode 6: a watched pump.fun caller posts a callout. callout_update only enriches an earlier call,
-// so it never buys; it can still report that the caller sold.
-function matchCallout(rule: Rule, a: CalloutActivity): Array<Hit | Skip | Exit> {
-  const out: Array<Hit | Skip | Exit> = [];
-  const mint = a.signals[0]?.mint;
-  if (rule.sellWhenCallerExits && a.callerHolds === false && mint) {
-    out.push({ kind: "exit", rule, mint, actor: a.actor, code: "caller_exited", detail: `@${a.actor.handle} reports holding 0` });
-  }
+// so it never buys.
+function matchCallout(rule: Rule, a: CalloutActivity): Array<Fire | Skip> {
+  const out: Array<Fire | Skip> = [];
   if (a.update) {
     if (rule.calloutKinds.includes(a.kind)) out.push(skip(rule, "update_not_new", "callout_update enriches an earlier call"));
     return out;
@@ -196,27 +188,21 @@ function matchCallout(rule: Rule, a: CalloutActivity): Array<Hit | Skip | Exit> 
 
 // Mode 7: a FOMO thesis by a watched author or on a watched coin, or a watched coin's first
 // observed verification.
-function matchFomo(rule: Rule, a: FomoActivity): Array<Hit | Skip | Exit> {
-  const out: Array<Hit | Skip | Exit> = [];
-  const byWatchedAuthor = rule.fomoUsers.some((u) => [a.actor.id, a.actor.handle].some((v) => v?.toLowerCase() === u.toLowerCase()));
-  const mint = a.signals[0]?.mint;
-  if (a.op === "thesis" && rule.sellWhenAuthorExits && a.authorExited && byWatchedAuthor && mint) {
-    out.push({ kind: "exit", rule, mint, actor: a.actor, code: "author_exited", detail: `${a.actor.handle} closed the position` });
-  }
-  if (a.authorExited || !rule.fomoEvents.includes(a.op)) return out; // a closing thesis is never a buy
-  if (a.op === "token_verified" && !rule.fomoCoins.includes(a.coin)) return out;
+function matchFomo(rule: Rule, a: FomoActivity): Array<Fire | Skip> {
+  if (a.authorExited || !rule.fomoEvents.includes(a.op)) return []; // a closing thesis is never a buy
+  if (a.op === "token_verified" && !rule.fomoCoins.includes(a.coin)) return [];
   if (a.op === "thesis") {
     const blocked = keywordSkip(rule, [[a.text]]);
-    if (blocked) return [...out, blocked];
+    if (blocked) return [blocked];
   }
   const detail = a.op === "thesis" ? `thesis by ${a.actor.handle}` : "first observed verification";
   const result = eventToken(rule, a.signals, detail);
-  return result ? [...out, result] : out;
+  return result ? [result] : [];
 }
 
 export type ModeEntry = {
   listens: (rule: Rule) => Array<[Activity["type"], string]>;
-  match: (rule: Rule, activity: Activity, knownBio: string | undefined) => Array<Hit | Skip | Exit>;
+  match: (rule: Rule, activity: Activity, knownBio: string | undefined) => Array<Fire | Skip>;
 };
 
 const on = (types: Array<Activity["type"]>, keys: string[]) => types.flatMap((t) => keys.map((k): [Activity["type"], string] => [t, k]));

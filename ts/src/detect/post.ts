@@ -10,11 +10,14 @@ import type { Actor, Confidence, PostActivity, Signal, SignalSource } from "./ty
 
 const MAX_REF_DEPTH = 4;
 
-export const xActor = (author: Author | undefined): Actor => ({
-  namespace: !author?.platform || author.platform === "twitter" ? "x" : author.platform,
-  id: author?.id,
-  handle: normalizeHandle(author?.handle),
-});
+// An account's effective platform is its own, else the platform of the event or outer account it
+// appears in. Only "twitter" accounts get namespace "x", the only namespace rule specs match.
+export function accountActor(author: Author | undefined, fallbackPlatform: string): Actor {
+  const platform = author?.platform ?? fallbackPlatform;
+  return { namespace: platform === "twitter" ? "x" : (platform as Actor["namespace"]), id: author?.id, handle: normalizeHandle(author?.handle) };
+}
+
+const keyPlatform = (postKey: string) => postKey.slice(0, postKey.indexOf(":"));
 
 export function makeSignal(
   source: SignalSource,
@@ -42,7 +45,7 @@ export function refLevels(ref: Reference | undefined): Reference[][] {
 
 // Every contract address in a post, strongest evidence first, one signal per mint.
 export function detectPostSignals(post: Post, postKey: string, eventRef: string): Signal[] {
-  const actor = xActor(post.author);
+  const actor = accountActor(post.author, keyPlatform(postKey));
   const extra = { postKey };
   const out: Signal[] = [];
   for (const u of post.urls ?? []) {
@@ -64,7 +67,7 @@ export function detectPostSignals(post: Post, postKey: string, eventRef: string)
 
 // tweet/meta carries no author, so the caller passes the author of the stored post.
 export function detectMetaSignals(meta: TweetMeta, author: Author | undefined, postKey: string, eventRef: string): Signal[] {
-  const actor = xActor(author);
+  const actor = accountActor(author, keyPlatform(postKey));
   const out: Signal[] = [];
   for (const token of meta.detected?.tokens ?? []) {
     const contract = token.contract;
@@ -81,13 +84,15 @@ export function detectMetaSignals(meta: TweetMeta, author: Author | undefined, p
 // What the post's author did, for the engagement and new tweet modes.
 export function postActivity(post: Post, postKey: string, eventRef: string, signals: Signal[]): PostActivity {
   const levels = refLevels(post.ref);
+  const author = { platform: post.author?.platform ?? keyPlatform(postKey) };
+  const actor = accountActor(post.author, author.platform);
   return {
     type: "post",
     kind: post.kind ?? "post",
-    actor: xActor(post.author),
+    actor,
     postKey,
     eventRef,
-    target: post.ref ? { tweetId: post.ref.tweetId, account: xActor(post.ref.author) } : null,
+    target: post.ref ? { tweetId: post.ref.tweetId, account: accountActor(post.ref.author, author.platform ?? keyPlatform(postKey)) } : null,
     texts: [[post.text ?? ""], ...levels.map((level) => level.map((r) => r.text ?? ""))],
     signals,
   };

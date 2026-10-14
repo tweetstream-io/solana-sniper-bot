@@ -52,7 +52,6 @@ function network(accounts: Record<string, AccountData>, delayMs = 0, rug: { scor
     epochInfo: never,
     signatureStatus: never,
     transactionDebit: never,
-    pumpPortalTx: never,
     jupiterOrder: never,
     jupiterExecute: never,
     recentPriorityFees: never,
@@ -60,6 +59,9 @@ function network(accounts: Record<string, AccountData>, delayMs = 0, rug: { scor
     solUsdPrice: never,
     quoteSellLamports: never,
     tokenBalance: never,
+    isBlockhashValid: never,
+    balance: never,
+    simulate: never,
   };
 }
 
@@ -67,7 +69,6 @@ const rule = (filters: object = {}) => parseConfig({ rules: [{ name: "r", mode: 
 const deps = (net: Network, budgetMs = 100, safety: object = {}): GateDeps => ({
   network: net,
   safety: parseConfig({ rules: [{ name: "r", mode: "ca_scanner", accounts: ["1"] }], safety: { budgetMs, ...safety } }).safety,
-  pumpBuilder: "local",
   solUsd: () => 150,
   epoch: () => 850,
 });
@@ -112,11 +113,10 @@ test("a 2.5% transfer fee fails the default maxPoolTaxPct of 0", async () => {
   assert.equal(result.facts.taxPct, 2.5);
 });
 
-test("a curve paired with another token is not priced in SOL, so a market cap filter has no data", async () => {
-  const usdcPaired = liveCurve(Buffer.alloc(32, 1));
-  const result = await runGate(MINT, rule({ maxMarketCapUsd: 1_000_000 }), null, deps(network({ [MINT]: mint(T22), [curveKey]: usdcPaired })));
-  assert.equal(result.pass === false && result.code, "missing_data");
-  assert.equal(result.facts.marketCapUsd, undefined);
+test("a live curve quoted in another token is skipped as unsupported", async () => {
+  const otherQuote = liveCurve(Buffer.alloc(32, 1));
+  const result = await runGate(MINT, rule(), null, deps(network({ [MINT]: mint(T22), [curveKey]: otherQuote })));
+  assert.equal(result.pass === false && result.code, "unsupported_curve");
 });
 
 test("a required Rugcheck report without a score counts as unknown when a score limit is set", async () => {

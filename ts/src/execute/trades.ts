@@ -1,85 +1,69 @@
-// The trade state machine and the only owner of durable bot state: snipes used, SOL spent, buys
-// made, open positions, and every trade in flight. Format: shared/ledger.schema.json. Rules:
-// shared/README.md, section Trade state. execute/trade.ts drives it; nothing else writes state.
+// The bot's durable state, and the only code that writes it: mints bought, SOL spent, positions
+// held, and trades whose outcome is not known yet. Format: shared/ledger.schema.json (version 2).
+// Rules: shared/README.md, section Trade state. execute/trade.ts drives it.
 //
-//   reserved --> sending --> confirmed
-//      |            |----> failed        (the chain proved it failed)
-//      |            '----> unknown --> reconciled (landed or expired, found later)
-//      '--> failed (nothing was sent)
+//   buy:  begin -> recordPending (written before sending) -> resolve (one write) -> position
+//   sell: begin -> recordPending -> resolve -> position removed
 //
-// Reading order: load, reservations, transitions, queries, persistence.
+// Reading order: load and lock, buys and sells, outcomes, positions, persistence.
 
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import type { Actor } from "../detect/types.ts";
 
-export type TradeState = "reserved" | "sending" | "confirmed" | "failed" | "unknown" | "reconciled";
-export type Route = "pump" | "pumpportal" | "jupiter" | "dry_run";
-
-// Why a trade exists: the rule that fired, the event, and the account that triggered it. Kept on
-// the position so a delete of that post, or that caller or author leaving, can find it.
-export type Trigger = { rule: string; fireKey: string; eventRef: string; postKey?: string; actor: Actor };
-
-export type Trade = {
-  id: string;
-  side: "buy" | "sell";
-  mint: string;
-  route: Route;
-  state: TradeState;
-  createdAt: number;
-  trigger: Trigger;
-  reservedLamports: string; // largest possible wallet debit, held against the spend caps
-  feeBudgetLamports: string; // what a transaction that lands and fails can still cost
-  spentLamports?: string;
-  signature?: string;
-  lastValidBlockHeight?: number;
-  tx?: string; // signed bytes, base64, kept until resolved so a restart can rebroadcast
-  senders?: string[]; // where it was sent; a rebroadcast uses the same senders
-  sentAt?: number;
-  landed?: boolean;
-  error?: string;
-  tokenAmount?: string;
-  exitIntents: Array<{ code: string; at: number; detail: string }>;
-};
+export type Trigger = { eventRef: string; postKey?: string };
+export type PendingExit = { code: string; at: number };
 
 export type Position = {
-  mint: string;
+  rule: string;
+  trigger: Trigger;
   route: "pump" | "jupiter";
   tokenProgram: string;
   openedAt: number;
-  buyTradeId: string;
   costLamports: string;
-  tokenAmount: string | null; // null until a balance read succeeds
-  trigger: Trigger;
-  sellTradeId?: string;
+  tokenAmount: string | null; // null until a balance read returns more than 0
+  pendingExits: PendingExit[]; // kept until a sell confirms
 };
 
+export type Pending = {
+  side: "buy" | "sell";
+  mint: string;
+  route: "pump" | "jupiter";
+  signature: string | null; // null: Jupiter gave none and the transaction had none of ours yet
+  blockhash: string;
+  lastValidBlockHeight: number | null;
+  reservedLamports: string; // largest possible wallet debit, held against the spend caps
+  amountLamports: string; // what a buy spends on the token; the position's cost
+  rule: string;
+  trigger: Trigger;
+  tokenProgram: string;
+  sentAt: number;
+};
+
+// What a dry-run buy records: a pending entry without the parts only a sent transaction has.
+export type DryRunBuy = Omit<Pending, "side" | "signature" | "blockhash" | "lastValidBlockHeight" | "sentAt">;
+
 type State = {
-  version: 1;
+  version: 2;
   mode: "live" | "dry_run";
-  snipes: Record<string, number>;
+  purchases: Record<string, { rule: string; at: number }>;
   spend: { totalLamports: string; recent: Array<{ tradeId: string; at: number; lamports: string }> };
-  purchases: Record<string, { firstAt: number; tradeId: string }>;
-  trades: Record<string, Trade>;
   positions: Record<string, Position>;
+  pending: Record<string, Pending>;
 };
 
 export type SpendCaps = { maxPerTradeSol: number; maxPerHourSol: number; maxTotalSol: number };
 
-// How a sent trade ended, as the sender, Jupiter, or the reconciler learned it.
+// How a sent trade ended. Unknown changes nothing except a signature learned meanwhile.
 export type Outcome =
-  | { kind: "landed"; tokenAmount: bigint | null; spentLamports: bigint | null; signature?: string }
+  | { kind: "landed"; spentLamports: bigint | null; tokenAmount: bigint | null }
   | { kind: "failed"; error: string; spentLamports: bigint | null } // landed with an error
-  | { kind: "expired" } // never landed and its blockhash expired
-  | { kind: "rejected"; error: string } // refused before it could land (Jupiter /execute said so)
-  | { kind: "unknown"; error: string };
+  | { kind: "expired" } // not found, and its blockhash is no longer valid
+  | { kind: "rejected"; error: string } // Jupiter refused it before it could land
+  | { kind: "unknown"; error: string; signature?: string };
 
 const HOUR_MS = 3_600_000;
-const KEEP_RESOLVED = 1_000;
 export const solToLamports = (sol: number): bigint => BigInt(Math.round(sol * 1e9));
-const ACTIVE: TradeState[] = ["reserved", "sending", "unknown"];
-const isActive = (t: Trade) => ACTIVE.includes(t.state);
 
 const SCHEMA = JSON.parse(readFileSync(new URL("../../../shared/ledger.schema.json", import.meta.url), "utf8"));
 const validate = new Ajv2020({ allErrors: false, strict: true, strictTypes: false }).compile(SCHEMA);
@@ -89,272 +73,204 @@ export class StateError extends Error {}
 export class TradeBook {
   private readonly path: string | null;
   private readonly state: State;
-  private readonly snipes: Map<string, number>; // a Map, so a rule named "constructor" is just a name
-  private readonly active = new Map<string, Trade>(); // "buy:<mint>" -> the trade in flight, for O(1) checks
+  private readonly inProgress = new Set<string>(); // mints this process is buying or selling now
+  private readonly claims = new Map<string, number>(); // rule -> fires not yet recorded as a buy
   private nextId = 0;
 
   private constructor(path: string | null, state: State) {
     this.path = path;
     this.state = state;
-    this.snipes = new Map(Object.entries(state.snipes));
-    for (const t of Object.values(state.trades)) if (isActive(t)) this.active.set(`${t.side}:${t.mint}`, t);
   }
 
-  // ---- load ----
+  // ---- load and lock ----
 
-  // A null path keeps everything in memory (tests, the demo). A file is created only when it does
-  // not exist; any other read or validation problem stops startup, because a reset file would let
-  // the bot buy the same mints again.
+  // A null path keeps everything in memory (tests, the demo). Otherwise the lock comes first, then
+  // the file: created only when missing; anything unreadable, invalid, or of the other mode stops
+  // startup, because a reset file would let the bot buy the same mints again.
   static open(path: string | null, mode: State["mode"]): TradeBook {
-    const empty: State = { version: 1, mode, snipes: {}, spend: { totalLamports: "0", recent: [] }, purchases: {}, trades: {}, positions: {} };
+    const empty: State = { version: 2, mode, purchases: {}, spend: { totalLamports: "0", recent: [] }, positions: {}, pending: {} };
     if (!path) return new TradeBook(null, empty);
-    let text: string;
+    mkdirSync(dirname(path), { recursive: true });
+    lock(lockPath(path));
     try {
-      text = readFileSync(path, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new StateError(`cannot read ${path}: ${(error as Error).message}`);
-      mkdirSync(dirname(path), { recursive: true });
-      const book = new TradeBook(path, empty);
+      const book = new TradeBook(path, load(path, mode) ?? empty);
       book.save();
       return book;
-    }
-    let json: unknown;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      throw new StateError(`${path} is not valid JSON. Fix or move it; deleting it lets the bot buy the same mints again.`);
-    }
-    if (!validate(json)) {
-      const e = validate.errors?.[0];
-      throw new StateError(`${path} does not match shared/ledger.schema.json (${e?.instancePath || "/"} ${e?.message}). Fix or move it.`);
-    }
-    const state = json as State;
-    if (state.mode !== mode) throw new StateError(`${path} holds ${state.mode} state, but the bot runs in ${mode} mode.`);
-    return new TradeBook(path, state);
-  }
-
-  // A trade still "reserved" after a restart never reached "sending", and "sending" is written
-  // before anything goes on the wire, so nothing was sent. Returns the trades it closed.
-  recoverAfterRestart(): Trade[] {
-    const closed = Object.values(this.state.trades).filter((t) => t.state === "reserved");
-    for (const t of closed) this.failBeforeSend(t.id, "the bot stopped before sending");
-    return closed;
-  }
-
-  // ---- reservations (synchronous: nothing can interleave between check and record) ----
-
-  reserveSnipe(rule: string, maxSnipes: number): boolean {
-    const used = this.snipes.get(rule) ?? 0;
-    if (maxSnipes > 0 && used >= maxSnipes) return false;
-    this.snipes.set(rule, used + 1);
-    return true;
-  }
-
-  releaseSnipe(rule: string): void {
-    this.snipes.set(rule, Math.max(0, (this.snipes.get(rule) ?? 1) - 1));
-  }
-
-  // A buy is refused when the mint was bought before (and the rule says skip), when another buy of
-  // it is in flight, when the bot still holds it, or when the spend caps would be passed.
-  reserveBuy(o: {
-    mint: string;
-    trigger: Trigger;
-    route: Route;
-    maxDebit: bigint;
-    feeBudget: bigint;
-    caps: SpendCaps;
-    skipIfAlreadyBought: boolean;
-    skipIfAlreadyHolding: boolean;
-    now: number;
-  }): Trade | string {
-    if (this.activeTrade(o.mint, "buy")) return "another buy of this mint is in flight";
-    if (o.skipIfAlreadyBought && this.state.purchases[o.mint]) return `already bought (trade ${this.state.purchases[o.mint]!.tradeId})`;
-    if (o.skipIfAlreadyHolding && this.state.positions[o.mint]) return "the bot still holds this token";
-    const capped = this.checkSpend(o.maxDebit, o.caps, o.now);
-    if (capped) return capped;
-    const trade = this.newTrade("buy", o.mint, o.route, o.trigger, o.maxDebit, o.feeBudget, o.now);
-    this.state.spend.recent.push({ tradeId: trade.id, at: o.now, lamports: o.maxDebit.toString() });
-    this.state.spend.totalLamports = (BigInt(this.state.spend.totalLamports) + o.maxDebit).toString();
-    return trade;
-  }
-
-  // One sell at a time per position. A sell that is sending or unknown must resolve first; the
-  // reconciler rebroadcasts it meanwhile.
-  reserveSell(mint: string, trigger: Trigger, route: Route, now: number): Trade | string {
-    const position = this.state.positions[mint];
-    if (!position) return "no position";
-    const pending = position.sellTradeId ? this.state.trades[position.sellTradeId] : undefined;
-    if (pending && isActive(pending)) return `sell ${pending.id} is still ${pending.state}`;
-    const trade = this.newTrade("sell", mint, route, trigger, 0n, 0n, now);
-    position.sellTradeId = trade.id;
-    return trade;
-  }
-
-  // ---- transitions ----
-
-  // Written to disk, with fsync, before the transaction goes on the wire. If this throws the
-  // caller must not send, and must call failBeforeSend.
-  markSending(id: string, sent: { signature: string; lastValidBlockHeight: number; tx: string; route: Route; senders: string[] }, now: number): void {
-    const t = this.expect(id, ["reserved"]);
-    const before = { ...t };
-    Object.assign(t, { state: "sending", sentAt: now, ...sent });
-    try {
-      this.save();
     } catch (error) {
-      for (const key of Object.keys(t) as Array<keyof Trade>) if (!(key in before)) delete t[key];
-      Object.assign(t, before); // still "reserved": the caller fails it and sends nothing
+      rmSync(lockPath(path), { force: true });
       throw error;
     }
   }
 
-  // Nothing was sent: the filters said no, a build failed, or the pre-send write failed.
-  // Everything reserved for the trade comes back.
-  failBeforeSend(id: string, reason: string): void {
-    const t = this.expect(id, ["reserved"]);
-    Object.assign(t, { state: "failed", landed: false, error: reason });
-    if (t.side === "buy") this.settleSpend(t, 0n);
-    else this.clearSell(t);
-    this.trySave();
+  close(): void {
+    if (this.path) rmSync(lockPath(this.path), { force: true });
   }
 
-  // The result of a sent trade. Returns the exit intents to act on now (a buy that landed while
-  // exits were requested for it). "unknown" holds every reservation until the reconciler finds out.
-  resolve(id: string, outcome: Outcome, now: number): Trade["exitIntents"] {
-    const t = this.expect(id, ["sending", "unknown"]);
-    if (outcome.kind === "unknown") {
-      Object.assign(t, { state: "unknown", error: outcome.error });
-      // A buy that may have landed counts as bought, so a repeat signal cannot buy it twice.
-      if (t.side === "buy") this.state.purchases[t.mint] ??= { firstAt: now, tradeId: t.id };
+  // ---- buys and sells ----
+
+  // A rule's snipes are its purchases, its pending buys, and its fires not recorded yet. The
+  // engine claims one when a rule fires; recording the buy uses it up, releaseSnipe gives it back.
+  claimSnipe(rule: string, maxSnipes: number): boolean {
+    const claimed = this.claims.get(rule) ?? 0;
+    const bought = Object.values(this.state.purchases).filter((p) => p.rule === rule).length;
+    const pending = Object.values(this.state.pending).filter((p) => p.side === "buy" && p.rule === rule).length;
+    if (maxSnipes > 0 && claimed + bought + pending >= maxSnipes) return false;
+    this.claims.set(rule, claimed + 1);
+    return true;
+  }
+
+  releaseSnipe(rule: string): void {
+    const claimed = this.claims.get(rule) ?? 0;
+    if (claimed > 0) this.claims.set(rule, claimed - 1);
+  }
+
+  // One buy per mint, ever, and one trade per mint at a time. Returns why not, or null after
+  // marking the mint as in progress until end().
+  begin(mint: string, side: "buy" | "sell"): string | null {
+    if (side === "buy" && this.state.purchases[mint]) return "already bought";
+    if (side === "sell" && !this.state.positions[mint]) return "no position";
+    if (this.inProgress.has(mint) || this.pendingFor(mint)) return "a trade of this mint is in progress";
+    this.inProgress.add(mint);
+    return null;
+  }
+
+  end(mint: string): void {
+    this.inProgress.delete(mint);
+  }
+
+  newTradeId(now: number): string {
+    return `${now.toString(36)}-${(this.nextId++).toString(36)}`;
+  }
+
+  // Written before the transaction goes out. A buy first checks its reservation against the spend
+  // caps (returning why it does not fit) and reserves it in the same write. Throws when the write
+  // fails, with nothing changed, so the caller sends nothing.
+  recordPending(id: string, p: Pending, caps: SpendCaps, now: number): string | null {
+    if (p.side === "buy") {
+      const capped = this.checkSpend(BigInt(p.reservedLamports), caps, now);
+      if (capped) return capped;
+    }
+    const spendBefore = structuredClone(this.state.spend);
+    this.state.pending[id] = p;
+    if (p.side === "buy") this.addSpend(id, BigInt(p.reservedLamports), now);
+    try {
       this.save();
-      return [];
+    } catch (error) {
+      delete this.state.pending[id];
+      this.state.spend = spendBefore;
+      throw error;
     }
-    const final: TradeState =
-      t.state === "unknown" ? "reconciled" : outcome.kind === "landed" ? "confirmed" : outcome.kind === "expired" ? "reconciled" : "failed";
-    t.state = final;
-    t.landed = outcome.kind === "landed" || outcome.kind === "failed";
-    let intents: Trade["exitIntents"] = [];
-    if (outcome.kind === "landed") {
-      if (outcome.signature) t.signature = outcome.signature;
-      if (outcome.tokenAmount !== null) t.tokenAmount = outcome.tokenAmount.toString();
-      if (t.side === "buy") {
-        this.settleSpend(t, outcome.spentLamports);
-        this.state.purchases[t.mint] ??= { firstAt: now, tradeId: t.id };
-        intents = t.exitIntents;
-      } else {
-        delete this.state.positions[t.mint];
-      }
-    } else {
-      if (outcome.kind === "failed" || outcome.kind === "rejected") t.error = outcome.error;
-      if (t.side === "buy") {
-        // A failed transaction still paid its fees; an expired one paid nothing.
-        this.settleSpend(t, outcome.kind === "failed" ? (outcome.spentLamports ?? BigInt(t.feeBudgetLamports)) : 0n);
-        if (this.state.purchases[t.mint]?.tradeId === t.id) delete this.state.purchases[t.mint];
-      } else {
-        this.clearSell(t);
-      }
-    }
-    delete t.tx;
-    this.save();
-    return intents;
+    if (p.side === "buy") this.releaseSnipe(p.rule); // counted from the pending buy from now on
+    return null;
   }
 
-  // Dry run: a trade goes straight from reserved to confirmed, with its reservation as its cost.
-  confirmDryRun(id: string, now: number): Trade["exitIntents"] {
-    const t = this.expect(id, ["reserved"]);
-    if (t.route !== "dry_run") throw new StateError(`trade ${id} is live; only dry-run trades confirm without sending`);
-    Object.assign(t, { state: "confirmed", landed: true, spentLamports: t.reservedLamports });
-    if (t.side === "buy") this.state.purchases[t.mint] ??= { firstAt: now, tradeId: t.id };
-    else delete this.state.positions[t.mint];
+  // Dry run: the buy is recorded as if it landed for its reservation, so limits behave as live.
+  recordDryRunBuy(id: string, p: DryRunBuy, tokenAmount: bigint | null, caps: SpendCaps, now: number): string | null {
+    const capped = this.checkSpend(BigInt(p.reservedLamports), caps, now);
+    if (capped) return capped;
+    this.addSpend(id, BigInt(p.reservedLamports), now);
+    this.openPosition(p, tokenAmount, now);
+    this.releaseSnipe(p.rule);
     this.trySave();
-    return t.exitIntents;
+    return null;
   }
 
-  // A dry run or a landed buy opens a position. tokenAmount null means "not read yet".
-  openPosition(p: Omit<Position, "sellTradeId">): void {
-    this.state.positions[p.mint] = p;
-    this.save();
+  recordDryRunSell(mint: string): void {
+    delete this.state.positions[mint];
+    this.trySave();
   }
 
-  setTokenAmount(mint: string, amount: bigint): void {
-    const p = this.state.positions[mint];
-    if (!p) return;
-    p.tokenAmount = amount.toString();
-    this.save();
-  }
+  // ---- outcomes ----
 
-  // An exit asked for while the buy is still pending is kept on the buy and applied when it lands.
-  addExitIntent(mint: string, code: string, detail: string, now: number): "pending" | "position" | "none" {
-    const buy = this.activeTrade(mint, "buy");
-    if (buy) {
-      buy.exitIntents.push({ code, at: now, detail });
-      this.trySave();
-      return "pending";
+  // One write per outcome; the table is in shared/README.md, section Trade state.
+  resolve(id: string, outcome: Outcome, now: number): void {
+    const p = this.state.pending[id];
+    if (!p) throw new StateError(`trade ${id} is not pending`);
+    if (outcome.kind === "unknown") {
+      if (outcome.signature && outcome.signature !== p.signature) {
+        p.signature = outcome.signature;
+        this.trySave();
+      }
+      return;
     }
-    return this.state.positions[mint] ? "position" : "none";
+    delete this.state.pending[id];
+    if (p.side === "buy") {
+      if (outcome.kind === "landed") this.openPosition(p, outcome.tokenAmount, now);
+      // A transaction that landed paid what it paid; one that never landed paid nothing.
+      this.settleSpend(id, outcome.kind === "landed" || outcome.kind === "failed" ? outcome.spentLamports : 0n);
+    } else if (outcome.kind === "landed") {
+      delete this.state.positions[p.mint];
+    }
+    this.save();
   }
 
-  // ---- queries ----
-
-  trade(id: string): Trade | undefined {
-    return this.state.trades[id];
+  pending(): Array<[string, Pending]> {
+    return Object.entries(this.state.pending);
   }
+
+  // ---- positions ----
 
   position(mint: string): Position | undefined {
     return this.state.positions[mint];
   }
 
-  positions(): Position[] {
-    return Object.values(this.state.positions);
+  positions(): Array<[string, Position]> {
+    return Object.entries(this.state.positions);
   }
 
-  // Sent trades whose outcome the reconciler still has to find.
-  unresolved(): Trade[] {
-    return Object.values(this.state.trades).filter((t) => t.state === "sending" || t.state === "unknown");
+  // Mints bought on this post, for delete exits.
+  boughtOnPost(postKey: string): string[] {
+    return this.positions()
+      .filter(([, p]) => p.trigger.postKey === postKey)
+      .map(([mint]) => mint);
   }
 
-  // Positions and pending buys an exit applies to: the ones bought on a post (delete), or the ones
-  // a rule bought because of this account (caller and author exits).
-  exitTargets(match: { postKey: string } | { rule: string; actor: Actor }): string[] {
-    const triggers = [
-      ...this.positions().map((p) => ({ mint: p.mint, trigger: p.trigger })),
-      ...Object.values(this.state.trades).filter((t) => t.side === "buy" && isActive(t)).map((t) => ({ mint: t.mint, trigger: t.trigger })),
-    ];
-    const hits = triggers.filter(({ trigger }) =>
-      "postKey" in match ? trigger.postKey === match.postKey : trigger.rule === match.rule && sameActor(trigger.actor, match.actor),
-    );
-    return [...new Set(hits.map((h) => h.mint))];
+  // Kept on the position until a sell of it confirms. False when there is no position.
+  addExit(mint: string, exit: PendingExit): boolean {
+    const p = this.state.positions[mint];
+    if (!p) return false;
+    if (!p.pendingExits.some((e) => e.code === exit.code)) p.pendingExits.push(exit);
+    this.trySave();
+    return true;
+  }
+
+  // Mints to sell now: an exit waits, the balance is known, and no trade of the mint is running.
+  positionsToExit(): string[] {
+    return this.positions()
+      .filter(([mint, p]) => p.pendingExits.length > 0 && p.tokenAmount !== null && !this.inProgress.has(mint) && !this.pendingFor(mint))
+      .map(([mint]) => mint);
+  }
+
+  // A balance read right after a buy can still show 0 at the RPC; only a positive one is kept.
+  setTokenAmount(mint: string, amount: bigint): void {
+    const p = this.state.positions[mint];
+    if (!p || amount <= 0n) return;
+    p.tokenAmount = amount.toString();
+    this.trySave();
+  }
+
+  flush(): void {
+    this.trySave();
   }
 
   // ---- internals ----
 
-  private newTrade(side: Trade["side"], mint: string, route: Route, trigger: Trigger, reserved: bigint, feeBudget: bigint, now: number): Trade {
-    const trade: Trade = {
-      id: `${now.toString(36)}-${(this.nextId++).toString(36)}`,
-      side,
-      mint,
-      route,
-      state: "reserved",
-      createdAt: now,
-      trigger,
-      reservedLamports: reserved.toString(),
-      feeBudgetLamports: feeBudget.toString(),
-      exitIntents: [],
+  private pendingFor(mint: string): boolean {
+    return Object.values(this.state.pending).some((p) => p.mint === mint);
+  }
+
+  private openPosition(p: DryRunBuy, tokenAmount: bigint | null, now: number): void {
+    this.state.purchases[p.mint] = { rule: p.rule, at: now };
+    this.state.positions[p.mint] = {
+      rule: p.rule,
+      trigger: p.trigger,
+      route: p.route,
+      tokenProgram: p.tokenProgram,
+      openedAt: now,
+      costLamports: p.amountLamports,
+      tokenAmount: tokenAmount !== null && tokenAmount > 0n ? tokenAmount.toString() : null,
+      pendingExits: [],
     };
-    this.state.trades[trade.id] = trade;
-    this.active.set(`${side}:${mint}`, trade);
-    return trade;
-  }
-
-  private activeTrade(mint: string, side: Trade["side"]): Trade | undefined {
-    const t = this.active.get(`${side}:${mint}`);
-    if (t && !isActive(t)) this.active.delete(`${side}:${mint}`); // resolved since: forget it
-    return t && isActive(t) ? t : undefined;
-  }
-
-  private expect(id: string, states: TradeState[]): Trade {
-    const t = this.state.trades[id];
-    if (!t || !states.includes(t.state)) throw new StateError(`trade ${id} is ${t?.state ?? "missing"}, expected ${states.join(" or ")}`);
-    return t;
   }
 
   private checkSpend(lamports: bigint, caps: SpendCaps, now: number): string | null {
@@ -366,31 +282,30 @@ export class TradeBook {
     return null;
   }
 
-  // Replaces the reservation with what the trade actually cost. Unknown actual cost keeps it.
-  private settleSpend(t: Trade, actual: bigint | null): void {
-    if (actual === null) return;
-    const reserved = BigInt(t.spentLamports ?? t.reservedLamports);
-    t.spentLamports = actual.toString();
-    this.state.spend.totalLamports = (BigInt(this.state.spend.totalLamports) - reserved + actual).toString();
-    const entry = this.state.spend.recent.find((s) => s.tradeId === t.id);
-    if (entry) entry.lamports = actual.toString();
+  private addSpend(tradeId: string, lamports: bigint, now: number): void {
+    this.state.spend.recent.push({ tradeId, at: now, lamports: lamports.toString() });
+    this.state.spend.totalLamports = (BigInt(this.state.spend.totalLamports) + lamports).toString();
   }
 
-  private clearSell(t: Trade): void {
-    const p = this.state.positions[t.mint];
-    if (p?.sellTradeId === t.id) delete p.sellTradeId;
+  // Replaces a buy's reservation with what it cost. An unknown cost keeps the reservation; a buy
+  // older than the hour window is no longer in `recent` and keeps it too.
+  private settleSpend(tradeId: string, actual: bigint | null): void {
+    const entry = this.state.spend.recent.find((s) => s.tradeId === tradeId);
+    if (actual === null || !entry) return;
+    this.state.spend.totalLamports = (BigInt(this.state.spend.totalLamports) - BigInt(entry.lamports) + actual).toString();
+    entry.lamports = actual.toString();
   }
+
+  // ---- persistence ----
 
   // Temp file, fsync, rename, fsync the directory: after a crash the file is either the old state
   // or the new one, never half of each.
   private save(): void {
-    this.prune();
     if (!this.path) return;
-    this.state.snipes = Object.fromEntries(this.snipes);
     const tmp = `${this.path}.tmp`;
     const fd = openSync(tmp, "w");
     try {
-      writeSync(fd, JSON.stringify(this.state, null, 2));
+      writeSync(fd, `${JSON.stringify(this.state, null, 2)}\n`);
       fsyncSync(fd);
     } finally {
       closeSync(fd);
@@ -404,7 +319,7 @@ export class TradeBook {
     }
   }
 
-  // For transitions after the money question is settled: a failed write is retried by the next one.
+  // For writes after the money question is settled: a failed one is retried by the next write.
   private trySave(): void {
     try {
       this.save();
@@ -412,24 +327,61 @@ export class TradeBook {
       console.error(`state write failed, the next change retries it: ${(error as Error).message}`);
     }
   }
-
-  flush(): void {
-    this.trySave();
-  }
-
-  // Keeps the newest resolved trades and any a position still points to; active trades always stay.
-
-  private prune(): void {
-    const resolved = Object.values(this.state.trades).filter((t) => !isActive(t));
-    const keep = new Set(this.positions().flatMap((p) => [p.buyTradeId, p.sellTradeId ?? ""]));
-    for (const t of resolved.sort((a, b) => a.createdAt - b.createdAt).slice(0, Math.max(0, resolved.length - KEEP_RESOLVED))) {
-      if (!keep.has(t.id)) delete this.state.trades[t.id];
-    }
-  }
 }
 
-function sameActor(a: Actor, b: Actor): boolean {
-  if (a.namespace !== b.namespace) return false;
-  if (a.id && b.id) return a.id === b.id;
-  return !!a.handle && !!b.handle && a.handle.toLowerCase() === b.handle.toLowerCase();
+const lockPath = (statePath: string) => statePath.replace(/\.json$/, ".lock");
+
+// null when the file does not exist yet.
+function load(path: string, mode: State["mode"]): State | null {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new StateError(`cannot read ${path}: ${(error as Error).message}`);
+  }
+  let json: { version?: unknown };
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new StateError(`${path} is not valid JSON. Fix or move it; deleting it lets the bot buy the same mints again.`);
+  }
+  if (json.version === 1) throw new StateError(`${path} is a version 1 state file, which this bot does not read. Sell any tokens it lists, then move or delete it.`);
+  if (!validate(json)) {
+    const e = validate.errors?.[0];
+    throw new StateError(`${path} does not match shared/ledger.schema.json (${e?.instancePath || "/"} ${e?.message}). Fix or move it.`);
+  }
+  const state = json as State;
+  if (state.mode !== mode) throw new StateError(`${path} holds ${state.mode} state, but the bot runs in ${mode} mode.`);
+  return state;
+}
+
+// Exclusive create. A lock whose process is gone, or that cannot be read, is taken over once.
+function lock(path: string): void {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(path, JSON.stringify({ pid: process.pid, startedAt: Date.now() }), { flag: "wx" });
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw new StateError(`cannot create ${path}: ${(error as Error).message}`);
+    }
+    let pid: number | undefined;
+    try {
+      pid = (JSON.parse(readFileSync(path, "utf8")) as { pid?: number }).pid;
+    } catch {
+      pid = undefined;
+    }
+    if (pid !== undefined && alive(pid)) throw new StateError(`${path} is held by running process ${pid}. Stop it first: two bots on one state file could buy twice.`);
+    rmSync(path, { force: true });
+  }
+  throw new StateError(`could not take ${path}: another process is starting at the same time.`);
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM"; // the process exists under another user
+  }
 }
