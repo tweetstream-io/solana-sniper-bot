@@ -3,7 +3,7 @@
 // only when TWEETSTREAM_API_KEY is set. It never builds, signs, or sends a transaction.
 
 import WebSocket from "ws";
-import { readEnv, trialLink } from "../src/setup/env.ts";
+import { productLink, readEnv, trialLink } from "../src/setup/env.ts";
 import { loadConfig } from "../src/setup/config.ts";
 import { percentile } from "../src/report/latency.ts";
 
@@ -90,5 +90,5 @@ if (key) await timeWs(`tweetstream ${new URL(env.wsUrl).host}`, env.wsUrl, ["twe
 else rows.push(`tweetstream                  skipped: set TWEETSTREAM_API_KEY to measure the feed (${trialLink("cli-latency-probe")})`);
 
 console.log(rows.join("\n"));
-console.log("\nRound trips from this machine only. They do not include TweetStream's time from post to delivery; see https://tweetstream.io/speedcheck");
+console.log(`\nRound trips from this machine only. They do not include TweetStream's time from post to delivery; see ${productLink("/speedcheck", "cli-latency-probe")}`);
 process.exit(0);

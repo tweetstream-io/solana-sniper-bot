@@ -1,9 +1,34 @@
-// One matcher per rule mode. Each answers fire (with a mint), skip (with a stable code), or null
-// when the activity is not for that rule. Pure and synchronous. Next: rules/engine.ts.
+// The rule modes. Each mode has one entry in MODES (end of file): which activities and account
+// keys it listens to, and a pure matcher that answers fire (with a mint), skip (with a stable
+// code), or nothing. Next: rules/engine.ts applies the limits that need memory.
 
-import type { KeywordFilter, Rule } from "../setup/config.ts";
-import type { Activity, CalloutActivity, Confidence, FollowActivity, FomoActivity, PostActivity, ProfileActivity, Signal } from "../detect/types.ts";
-import { matchesAccount } from "./index.ts";
+import type { KeywordFilter, Mode, Rule } from "../setup/config.ts";
+import type { Activity, Actor, CalloutActivity, Confidence, FollowActivity, FomoActivity, PostActivity, ProfileActivity, Signal } from "../detect/types.ts";
+
+// Account keys. X accounts: numeric id ("id:") or handle ("h:"), only for namespace "x".
+// pump.fun callers by username ("pf:"), FOMO authors by id or username ("fu:"), FOMO coins by
+// address ("fc:"). Names compare without case.
+function xSpecKey(spec: string): string {
+  const value = spec.trim();
+  return /^\d+$/.test(value) ? `id:${value}` : `h:${value.replace(/^@/, "").toLowerCase()}`;
+}
+
+export function actorKeys(actor: Actor): string[] {
+  const keys: string[] = [];
+  const prefix = actor.namespace === "x" ? null : actor.namespace === "pump_fun" ? "pf:" : actor.namespace === "fomo" ? "fu:" : undefined;
+  if (prefix === null) {
+    if (actor.id) keys.push(`id:${actor.id}`);
+    if (actor.handle) keys.push(`h:${actor.handle.toLowerCase()}`);
+  } else if (prefix) {
+    if (actor.id) keys.push(`${prefix}${actor.id.toLowerCase()}`);
+    if (actor.handle) keys.push(`${prefix}${actor.handle.toLowerCase()}`);
+  }
+  return keys;
+}
+
+function matchesAccount(spec: string, actor: Actor): boolean {
+  return actor.namespace === "x" && actorKeys(actor).includes(xSpecKey(spec));
+}
 
 // Stable codes, shared with the Rust bot through shared/fixtures. Free text goes in `detail`.
 export type SkipCode =
@@ -21,7 +46,8 @@ export type SkipCode =
   | "cooldown"
   | "max_snipes";
 
-export type Match = {
+// What a matcher returns when its rule fires. The engine adds the acting account to make a Fire.
+type Hit = {
   kind: "fire";
   rule: Rule;
   mint: string;
@@ -29,10 +55,12 @@ export type Match = {
   detail: string;
   fireKey: string; // a rule fires once per key: per post, per account event, or per mint
 };
+// A rule that fired. `actor` is who triggered it, kept on the position for caller and author exits.
+export type Fire = Hit & { actor: Actor };
 export type Skip = { kind: "skip"; rule: Rule; code: SkipCode; detail: string };
 // Sell a position this rule bought, because the account it followed has left the trade.
-export type Exit = { kind: "exit"; rule: Rule; mint: string; code: "caller_exited" | "author_exited"; detail: string };
-export type Result = Match | Skip | null;
+export type Exit = { kind: "exit"; rule: Rule; mint: string; actor: Actor; code: "caller_exited" | "author_exited"; detail: string };
+type Result = Hit | Skip | null;
 
 const RANK: Record<Confidence, number> = { low: 0, medium: 1, high: 2 };
 
@@ -60,7 +88,7 @@ function keywordSkip(rule: Rule, texts: string[][]): Skip | null {
 }
 
 // The configured mint, or with useDetectedCa the first Solana address the event carried.
-function pickMint(rule: Rule, signals: Signal[], detail: string, fireKey: string): Match | Skip {
+function pickMint(rule: Rule, signals: Signal[], detail: string, fireKey: string): Hit | Skip {
   if (rule.token.mint) return { kind: "fire", rule, mint: rule.token.mint, signal: null, detail, fireKey };
   const signal = signals.find((s) => s.chain === "solana");
   if (signal) return { kind: "fire", rule, mint: signal.mint, signal, detail: `${detail}, CA from ${signal.source}`, fireKey };
@@ -71,7 +99,7 @@ function pickMint(rule: Rule, signals: Signal[], detail: string, fireKey: string
 }
 
 // The token the event names, limited to token.mint when the rule sets one.
-function eventToken(rule: Rule, signals: Signal[], detail: string): Match | Skip | null {
+function eventToken(rule: Rule, signals: Signal[], detail: string): Hit | Skip | null {
   const signal = signals[0];
   if (!signal) return skip(rule, "no_contract_address", `${detail}: the token address is not a valid Solana or EVM address`);
   if (rule.token.mint && signal.mint !== rule.token.mint) return null;
@@ -80,8 +108,8 @@ function eventToken(rule: Rule, signals: Signal[], detail: string): Match | Skip
 }
 
 // Mode 1: trade contract addresses the watched accounts post.
-export function matchCaScanner(rule: Rule, activity: Activity, knownBio: string | undefined): Array<Match | Skip> {
-  const out: Array<Match | Skip> = [];
+function matchCaScanner(rule: Rule, activity: Activity, knownBio: string | undefined): Array<Hit | Skip> {
+  const out: Array<Hit | Skip> = [];
   for (const s of activity.signals) {
     if (!(rule.sources as string[]).includes(s.source)) continue;
     if (rule.token.mint && s.mint !== rule.token.mint) continue;
@@ -98,7 +126,7 @@ export function matchCaScanner(rule: Rule, activity: Activity, knownBio: string 
 }
 
 // Mode 2: the reactor retweets, quotes, or replies to the target post or a target account.
-export function matchEngagement(rule: Rule, a: PostActivity): Result {
+function matchEngagement(rule: Rule, a: PostActivity): Result {
   if (a.kind === "post" || !rule.actions.includes(a.kind) || !a.target) return null;
   const target = a.target;
   const onTarget = rule.targetTweetId
@@ -112,7 +140,7 @@ export function matchEngagement(rule: Rule, a: PostActivity): Result {
 }
 
 // Mode 3: a watched account posts, retweets, quotes, replies, or changes its bio.
-export function matchNewTweet(rule: Rule, a: PostActivity | ProfileActivity): Result {
+function matchNewTweet(rule: Rule, a: PostActivity | ProfileActivity): Result {
   if (a.type === "profile") {
     if (!rule.events.includes("bio") || a.bio === null) return null;
     const blocked = keywordSkip(rule, [[a.bio]]);
@@ -124,7 +152,7 @@ export function matchNewTweet(rule: Rule, a: PostActivity | ProfileActivity): Re
 }
 
 // Mode 4: a watched account follows or unfollows someone.
-export function matchFollow(rule: Rule, a: FollowActivity): Result {
+function matchFollow(rule: Rule, a: FollowActivity): Result {
   if (!rule.followEvents.includes(a.op)) return null;
   if (rule.targets.length && !rule.targets.some((spec) => matchesAccount(spec, a.target))) return null;
   const detail = `${a.op} of @${a.target.handle}`;
@@ -135,7 +163,7 @@ export function matchFollow(rule: Rule, a: FollowActivity): Result {
 }
 
 // Mode 5: a watched account changes its avatar, or another selected profile field.
-export function matchPfp(rule: Rule, a: ProfileActivity): Result {
+function matchPfp(rule: Rule, a: ProfileActivity): Result {
   const hit = rule.fields.filter((f) => a.changed.includes(f));
   if (!hit.length) return null;
   return pickMint(rule, a.signals, `${hit.join(", ")} changed`, `${rule.name}|${a.eventRef}`);
@@ -143,11 +171,11 @@ export function matchPfp(rule: Rule, a: ProfileActivity): Result {
 
 // Mode 6: a watched pump.fun caller posts a callout. callout_update only enriches an earlier call,
 // so it never buys; it can still report that the caller sold.
-export function matchCallout(rule: Rule, a: CalloutActivity): Array<Match | Skip | Exit> {
-  const out: Array<Match | Skip | Exit> = [];
+function matchCallout(rule: Rule, a: CalloutActivity): Array<Hit | Skip | Exit> {
+  const out: Array<Hit | Skip | Exit> = [];
   const mint = a.signals[0]?.mint;
   if (rule.sellWhenCallerExits && a.callerHolds === false && mint) {
-    out.push({ kind: "exit", rule, mint, code: "caller_exited", detail: `@${a.actor.handle} reports holding 0` });
+    out.push({ kind: "exit", rule, mint, actor: a.actor, code: "caller_exited", detail: `@${a.actor.handle} reports holding 0` });
   }
   if (a.update) {
     if (rule.calloutKinds.includes(a.kind)) out.push(skip(rule, "update_not_new", "callout_update enriches an earlier call"));
@@ -168,12 +196,12 @@ export function matchCallout(rule: Rule, a: CalloutActivity): Array<Match | Skip
 
 // Mode 7: a FOMO thesis by a watched author or on a watched coin, or a watched coin's first
 // observed verification.
-export function matchFomo(rule: Rule, a: FomoActivity): Array<Match | Skip | Exit> {
-  const out: Array<Match | Skip | Exit> = [];
+function matchFomo(rule: Rule, a: FomoActivity): Array<Hit | Skip | Exit> {
+  const out: Array<Hit | Skip | Exit> = [];
   const byWatchedAuthor = rule.fomoUsers.some((u) => [a.actor.id, a.actor.handle].some((v) => v?.toLowerCase() === u.toLowerCase()));
   const mint = a.signals[0]?.mint;
   if (a.op === "thesis" && rule.sellWhenAuthorExits && a.authorExited && byWatchedAuthor && mint) {
-    out.push({ kind: "exit", rule, mint, code: "author_exited", detail: `${a.actor.handle} closed the position` });
+    out.push({ kind: "exit", rule, mint, actor: a.actor, code: "author_exited", detail: `${a.actor.handle} closed the position` });
   }
   if (a.authorExited || !rule.fomoEvents.includes(a.op)) return out; // a closing thesis is never a buy
   if (a.op === "token_verified" && !rule.fomoCoins.includes(a.coin)) return out;
@@ -185,3 +213,28 @@ export function matchFomo(rule: Rule, a: FomoActivity): Array<Match | Skip | Exi
   const result = eventToken(rule, a.signals, detail);
   return result ? [...out, result] : out;
 }
+
+export type ModeEntry = {
+  listens: (rule: Rule) => Array<[Activity["type"], string]>;
+  match: (rule: Rule, activity: Activity, knownBio: string | undefined) => Array<Hit | Skip | Exit>;
+};
+
+const on = (types: Array<Activity["type"]>, keys: string[]) => types.flatMap((t) => keys.map((k): [Activity["type"], string] => [t, k]));
+const one = (r: Result) => (r ? [r] : []);
+
+// Every mode in one table: the activities and keys it listens to, and its matcher.
+export const MODES: Record<Mode, ModeEntry> = {
+  ca_scanner: { listens: (r) => on(["post", "profile", "pin"], r.accounts.map(xSpecKey)), match: (r, a, bio) => matchCaScanner(r, a, bio) },
+  engagement: { listens: (r) => on(["post"], [xSpecKey(r.reactor)]), match: (r, a) => (a.type === "post" ? one(matchEngagement(r, a)) : []) },
+  new_tweet: {
+    listens: (r) => on(["post", "profile"], r.accounts.map(xSpecKey)),
+    match: (r, a) => (a.type === "post" || a.type === "profile" ? one(matchNewTweet(r, a)) : []),
+  },
+  follow: { listens: (r) => on(["follow"], r.accounts.map(xSpecKey)), match: (r, a) => (a.type === "follow" ? one(matchFollow(r, a)) : []) },
+  pfp_update: { listens: (r) => on(["profile"], r.accounts.map(xSpecKey)), match: (r, a) => (a.type === "profile" ? one(matchPfp(r, a)) : []) },
+  callout: { listens: (r) => on(["callout"], r.callers.map((c) => `pf:${c.toLowerCase()}`)), match: (r, a) => (a.type === "callout" ? matchCallout(r, a) : []) },
+  fomo: {
+    listens: (r) => on(["fomo"], [...r.fomoUsers.map((u) => `fu:${u.toLowerCase()}`), ...r.fomoCoins.map((c) => `fc:${c}`)]),
+    match: (r, a) => (a.type === "fomo" ? matchFomo(r, a) : []),
+  },
+};

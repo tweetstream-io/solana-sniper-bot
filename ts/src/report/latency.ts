@@ -14,6 +14,7 @@ export type Trace = {
   mint: string;
   rule: string;
   connection: string;
+  eventRef: string;
   publishedAtWall: number | null;
   receivedWall: number;
   receivedNs: bigint;

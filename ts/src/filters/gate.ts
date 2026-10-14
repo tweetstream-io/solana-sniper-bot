@@ -7,7 +7,7 @@ import type { Signal } from "../detect/types.ts";
 import type { MarketSnapshot, Network, RugcheckSummary } from "../network.ts";
 import { bondingCurveAddress, localBuildBlocker, parseCurve, TOKEN_2022_PROGRAM, TOKEN_PROGRAM, type Curve } from "../execute/pump.ts";
 
-export type Route = "pump" | "pumpportal" | "jupiter";
+export type Venue = "pump" | "pumpportal" | "jupiter";
 
 export type Facts = {
   platform?: string;
@@ -26,7 +26,6 @@ export type GateCode =
   | "risky_extension"
   | "rugcheck_danger"
   | "rugcheck_score"
-  | "already_holding"
   | "filter_platform"
   | "filter_tax"
   | "filter_market_cap"
@@ -36,7 +35,7 @@ export type GateCode =
   | "missing_data";
 
 type Verdict =
-  | { pass: true; route: Route; curve: Curve | null; tokenProgram: string; facts: Facts }
+  | { pass: true; route: Venue; curve: Curve | null; tokenProgram: string; facts: Facts }
   | { pass: false; code: GateCode; detail: string; facts: Facts };
 
 export type GateResult = Verdict & { elapsedMs: number };
@@ -45,8 +44,8 @@ export type GateDeps = {
   network: Network;
   safety: Config["safety"];
   pumpBuilder: Config["execution"]["pumpBuilder"];
-  solUsd: () => number | null; // cached by execute/trade.ts, refreshed in the background
-  holding: (mint: string) => boolean;
+  solUsd: () => number | null; // from execute/cache.ts, refreshed in the background
+  epoch: () => number | null; // the current epoch decides which Token-2022 transfer fee applies
 };
 
 type Settled<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -63,14 +62,24 @@ const RISKY_EXTENSIONS: Record<number, string> = {
   26: "pausable",
 };
 
+// A Token-2022 transfer fee has an older and a newer setting; the newer one applies from its epoch.
+type TransferFee = { older: { epoch: bigint; bps: number }; newer: { epoch: bigint; bps: number } };
+
 export type MintInfo = {
   mintAuthority: boolean;
   freezeAuthority: boolean;
   supply: bigint;
   decimals: number;
   extensions: number[];
-  transferFeeBps: number;
+  transferFee: TransferFee | null;
 };
+
+// The fee in force at `epoch`; with no epoch known, the higher of the two.
+export function transferFeeBps(fee: TransferFee | null, epoch: number | null): number {
+  if (!fee) return 0;
+  if (epoch === null) return Math.max(fee.older.bps, fee.newer.bps);
+  return BigInt(epoch) >= fee.newer.epoch ? fee.newer.bps : fee.older.bps;
+}
 
 // SPL Mint: 82 bytes (COption<Pubkey> mint authority, u64 supply, u8 decimals, bool, COption<Pubkey>
 // freeze authority). Token-2022 adds, after byte 165, an account-type byte and TLV extensions.
@@ -83,15 +92,22 @@ export function parseMint(data: Uint8Array): MintInfo | null {
     decimals: view[44]!,
     freezeAuthority: view.readUInt32LE(46) === 1,
     extensions: [],
-    transferFeeBps: 0,
+    transferFee: null,
   };
   for (let at = 166; data.length > 165 && view[165] === 1 && at + 4 <= data.length; ) {
     const type = view.readUInt16LE(at);
     const length = view.readUInt16LE(at + 2);
     if (type === 0) break;
     info.extensions.push(type);
-    // TransferFeeConfig: the newer fee's basis points sit 106 bytes into the value.
-    if (type === 1 && length >= 108) info.transferFeeBps = view.readUInt16LE(at + 4 + 106);
+    // TransferFeeConfig: two authorities (64 bytes) and withheld amount (8), then the older and the
+    // newer fee, each {epoch u64, maximum fee u64, basis points u16}.
+    if (type === 1 && length >= 108) {
+      const v = at + 4;
+      info.transferFee = {
+        older: { epoch: view.readBigUInt64LE(v + 72), bps: view.readUInt16LE(v + 88) },
+        newer: { epoch: view.readBigUInt64LE(v + 90), bps: view.readUInt16LE(v + 106) },
+      };
+    }
     at += 4 + length;
   }
   return info;
@@ -125,7 +141,7 @@ function judge(
   const facts: Facts = {};
   const fail = (code: GateCode, detail: string) => ({ pass: false as const, code, detail, facts });
 
-  let route: Route = "jupiter";
+  let route: Venue = "jupiter";
   let curve: Curve | null = null;
   let tokenProgram = TOKEN_PROGRAM.toBase58();
   if (!accounts.ok) {
@@ -150,12 +166,13 @@ function judge(
       const risky = info.extensions.find((t) => t in RISKY_EXTENSIONS);
       if (safety.rejectRiskyExtensions && risky !== undefined) return fail("risky_extension", RISKY_EXTENSIONS[risky]!);
     }
-    facts.taxPct = info.transferFeeBps / 100;
+    facts.taxPct = transferFeeBps(info.transferFee, deps.epoch()) / 100;
     if (live) {
       route = localBuildBlocker(curve!) || deps.pumpBuilder === "pumpportal" ? "pumpportal" : "pump";
       facts.platform = "pumpfun";
       const solUsd = deps.solUsd();
-      if (solUsd !== null) {
+      // Only a SOL-paired curve can be priced in SOL; other quote mints count as missing data.
+      if (solUsd !== null && curve!.solPaired) {
         // Market cap in lamports = price per raw unit (vQuote / vToken) x total raw supply.
         const capLamports = (curve!.virtualQuoteReserves * curve!.tokenTotalSupply) / curve!.virtualTokenReserves;
         facts.marketCapUsd = (Number(capLamports) / 1e9) * solUsd;
@@ -173,7 +190,6 @@ function judge(
   if (rug?.ok && rug.value) facts.suspicious = rug.value.dangers.length > 0;
 
   const f = rule.filters;
-  if (f.skipIfAlreadyHolding && deps.holding(mint)) return fail("already_holding", "the bot still holds this token");
   const missing = (filter: string, what: string) =>
     f.onMissingData === "reject" ? fail("missing_data", `${filter} needs ${what}, and none arrived within ${safety.budgetMs} ms`) : null;
   const range = (value: number | undefined, min: number | null, max: number | null, code: GateCode, name: string, unit: string) => {
@@ -209,8 +225,12 @@ function judge(
       if (rug.value.dangers.length && (f.skipSuspiciousPools || safety.rugcheck !== "off")) {
         return fail(f.skipSuspiciousPools ? "filter_suspicious" : "rugcheck_danger", rug.value.dangers.join(", "));
       }
-      if (safety.maxRugcheckScore !== null && rug.value.score !== null && rug.value.score > safety.maxRugcheckScore) {
-        return fail("rugcheck_score", `score ${rug.value.score} is above ${safety.maxRugcheckScore}`);
+      if (safety.maxRugcheckScore !== null) {
+        if (rug.value.score === null) {
+          if (safety.rugcheck === "required" && safety.onUnknown === "reject") return fail("check_unknown", "rugcheck report has no score");
+        } else if (rug.value.score > safety.maxRugcheckScore) {
+          return fail("rugcheck_score", `score ${rug.value.score} is above ${safety.maxRugcheckScore}`);
+        }
       }
     }
   } else if (f.skipSuspiciousPools) {

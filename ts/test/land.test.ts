@@ -27,7 +27,7 @@ async function rpcServer(status: number, received: string[]): Promise<{ url: str
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
       const msg = JSON.parse(body) as { id: number; method: string; params: [string] };
-      received.push(msg.method);
+      received.push(`${msg.method} ${msg.params[0]}`);
       res.writeHead(status, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: "sig" }));
     });
@@ -61,16 +61,13 @@ async function landOnce(err: unknown) {
   const watcher = new SignatureWatcher(ps.url);
   watcher.start();
   await new Promise((r) => setTimeout(r, 50));
-  const lander = new Lander(
-    [
-      { name: "down", url: bad.url, kind: "rpc" },
-      { name: "up", url: good.url, kind: "rpc" },
-    ],
-    watcher,
-    { rebroadcastMs: 10_000, confirmTimeoutMs: 2_000, currentBlockHeight: () => 0 },
-  );
+  const lander = new Lander(watcher, { rebroadcastMs: 10_000, confirmTimeoutMs: 2_000, currentBlockHeight: () => 0, statusRpcUrl: null });
   const tx = signedTx();
-  const result = await lander.land(tx, 1_000);
+  const targets = [
+    { name: "down", url: bad.url, kind: "rpc" as const },
+    { name: "up", url: good.url, kind: "rpc" as const },
+  ];
+  const result = await lander.land(tx, 1_000, targets);
   watcher.stop();
   ps.close();
   good.server.close();
@@ -83,8 +80,9 @@ test("the same transaction goes to every sender; the first to accept is recorded
   assert.equal(result.status, "confirmed");
   assert.equal(result.firstAckBy, "up");
   assert.equal(result.signature, bs58.encode(tx.signatures[0]!));
-  assert.deepEqual(goodCalls, ["sendTransaction"]);
-  assert.deepEqual(badCalls, ["sendTransaction"]);
+  const bytes = Buffer.from(tx.serialize()).toString("base64");
+  assert.deepEqual(goodCalls, [`sendTransaction ${bytes}`], "every sender gets the same signed bytes");
+  assert.deepEqual(badCalls, [`sendTransaction ${bytes}`]);
   assert.ok(result.confirmedNs! > result.sentNs);
 });
 

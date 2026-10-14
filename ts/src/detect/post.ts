@@ -5,13 +5,13 @@
 import type { Author, Reference, TweetMeta } from "../protocol.ts";
 import { normalizeHandle } from "../protocol.ts";
 import type { Post } from "./store.ts";
-import { addressesFromUrl, DENYLIST, findAll, isSolanaAddress, type FoundAddress } from "./addresses.ts";
+import { addressesFromUrl, findAll, isSolanaAddress, type FoundAddress } from "./addresses.ts";
 import type { Actor, Confidence, PostActivity, Signal, SignalSource } from "./types.ts";
 
 const MAX_REF_DEPTH = 4;
 
 export const xActor = (author: Author | undefined): Actor => ({
-  namespace: "x",
+  namespace: !author?.platform || author.platform === "twitter" ? "x" : author.platform,
   id: author?.id,
   handle: normalizeHandle(author?.handle),
 });
@@ -28,8 +28,6 @@ export function makeSignal(
   return { source, chain: found.chain, mint: found.address, actor, eventRef, confidence, detail, ...extra };
 }
 
-// A link names a mint more reliably than a bare string, except chart links that may name a pool.
-const linkConfidence = (f: FoundAddress): Confidence => (f.via === "dexscreener" ? "low" : "high");
 
 // Referenced posts by depth: level 1 is the direct reference, level 2 what that one references.
 export function refLevels(ref: Reference | undefined): Reference[][] {
@@ -48,11 +46,11 @@ export function detectPostSignals(post: Post, postKey: string, eventRef: string)
   const extra = { postKey };
   const out: Signal[] = [];
   for (const u of post.urls ?? []) {
-    for (const f of addressesFromUrl(u.url)) out.push(makeSignal("url", f, actor, eventRef, linkConfidence(f), `${f.via} link`, extra));
+    for (const f of addressesFromUrl(u.url)) out.push(makeSignal("url", f, actor, eventRef, f.confidence, `${f.via} link`, extra));
   }
   for (const f of findAll(post.text)) {
     if (f.via === "address") out.push(makeSignal("text", f, actor, eventRef, "high", "in post text", extra));
-    else out.push(makeSignal("url", f, actor, eventRef, linkConfidence(f), `${f.via} link in text`, extra));
+    else out.push(makeSignal("url", f, actor, eventRef, f.confidence, `${f.via} link in text`, extra));
   }
   for (const level of refLevels(post.ref)) {
     for (const r of level) {
@@ -70,7 +68,7 @@ export function detectMetaSignals(meta: TweetMeta, author: Author | undefined, p
   const out: Signal[] = [];
   for (const token of meta.detected?.tokens ?? []) {
     const contract = token.contract;
-    if (!contract || DENYLIST.has(contract) || !isSolanaAddress(contract)) continue;
+    if (!contract || !isSolanaAddress(contract)) continue;
     // Found in the text is as strong as a CA in the text; found only in an image is weaker.
     const confidence = token.sources?.includes("text") ? "high" : "medium";
     const label = token.symbol ? `$${token.symbol}` : "token";

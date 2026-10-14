@@ -5,7 +5,7 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { readEnv, SETUP_HELP, SetupError, ultraTrialLink, type Env } from "./setup/env.ts";
 import { ConfigError, handleWarnings, loadConfig, type Config } from "./setup/config.ts";
-import { Ledger } from "./rules/ledger.ts";
+import { StateError, TradeBook } from "./execute/trades.ts";
 import { LiveNetwork } from "./network.ts";
 import { startBot } from "./pipeline.ts";
 import type { SenderTarget } from "./land/land.ts";
@@ -32,12 +32,12 @@ function loadWallet(env: Env): Keypair | null {
 }
 
 function senderTargets(env: Env, config: Config): SenderTarget[] {
-  const targets: SenderTarget[] = env.rpcUrls.map((url) => ({ name: new URL(url).host, url, kind: "rpc" }));
+  const targets: SenderTarget[] = env.rpcUrls.map((url) => ({ name: new URL(url).host, url, kind: "rpc" as const }));
   if (env.jitoUrl) targets.push({ name: "jito", url: `${env.jitoUrl}/api/v1/transactions`, kind: "jito" });
   for (const s of config.senders) {
     const url = process.env[s.urlEnv]?.trim();
     if (!url) fail(`senders "${s.name}": set ${s.urlEnv} in .env to the sender's URL, or remove the sender from config.json.`);
-    targets.push({ name: s.name, url, kind: "rpc" });
+    targets.push({ name: s.name, url, kind: "rpc", needsTip: s.tipAccounts.length > 0 && s.tipSol > 0 });
   }
   return targets;
 }
@@ -71,18 +71,24 @@ const feeds = [
   ...(env.apiKey ? [{ name: "standard", apiKey: env.apiKey }] : []),
 ];
 const network = new LiveNetwork(env.rpcUrls[0]!, env.jupiterApiKey);
-const bot = startBot({
+// Dry runs and live trading keep separate state, so a dry run never uses up live limits.
+let book: TradeBook;
+try {
+  book = TradeBook.open(`${env.stateDir}/${env.dryRun ? "dry-run" : "live"}.json`, env.dryRun ? "dry_run" : "live");
+} catch (error) {
+  if (error instanceof StateError) fail(error.message);
+  throw error;
+}
+const bot = await startBot({
   config,
   network,
-  ledger: Ledger.open(`${env.stateDir}/ledger.json`),
+  book,
   feeds,
   wsUrl: env.wsUrl,
   dryRun: env.dryRun,
   wallet,
-  senders: env.dryRun ? [] : senderTargets(env, config),
+  senders: senderTargets(env, config), // unused in dry run, but they shape the tips each transaction carries
   rpcWsUrl: env.rpcWsUrl,
-  jitoEnabled: env.jitoUrl !== null,
-  jupiterHeaders: network.jupiterHeaders(),
   onFatal: (reason) => {
     bot.stop();
     fail(reason);

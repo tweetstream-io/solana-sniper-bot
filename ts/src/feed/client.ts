@@ -5,6 +5,7 @@
 import WebSocket from "ws";
 import type { Envelope } from "../protocol.ts";
 import { log } from "../log.ts";
+import { productLink } from "../setup/env.ts";
 
 export type Receipt = {
   connection: string;
@@ -21,7 +22,7 @@ export type FeedOptions = {
   onFatal: (reason: string) => void;
 };
 
-const DASHBOARD = "https://tweetstream.io/dashboard?tab=api";
+const DASHBOARD = productLink("/dashboard?tab=api", "cli-key-rejected");
 
 // Exponential backoff with jitter, so many clients do not reconnect in lockstep after an outage.
 export function backoffMs(attempt: number, random = Math.random()): number {

@@ -5,9 +5,9 @@ import { Keypair } from "@solana/web3.js";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "../src/setup/config.ts";
 import { trialLink } from "../src/setup/env.ts";
-import { Ledger } from "../src/rules/ledger.ts";
+import { TradeBook } from "../src/execute/trades.ts";
 import { startBot } from "../src/pipeline.ts";
-import { ScenarioNetwork, type Chain } from "./scenario-network.ts";
+import { ScenarioNetwork, type ScenarioChain } from "./scenario-network.ts";
 import { loadScenario, startDemoFeed } from "./demo-feed.ts";
 import { log } from "../src/log.ts";
 
@@ -16,10 +16,10 @@ const config = loadConfig(fileURLToPath(new URL("../../shared/demo/config.json",
 const feed = await startDemoFeed({ port: 0, scenario, clients: 2, speed: 1 });
 log("demo", `dry run against the local demo feed on port ${feed.port}; nothing leaves this machine`);
 
-const bot = startBot({
+const bot = await startBot({
   config,
-  network: new ScenarioNetwork(scenario.chain as Chain),
-  ledger: Ledger.open(null),
+  network: new ScenarioNetwork(scenario.chain as ScenarioChain),
+  book: TradeBook.open(null, "dry_run"),
   feeds: [
     { name: "ultra", apiKey: scenario.keys.ultra },
     { name: "standard", apiKey: scenario.keys.standard },
@@ -29,8 +29,6 @@ const bot = startBot({
   wallet: Keypair.generate(),
   senders: [],
   rpcWsUrl: "",
-  jitoEnabled: true,
-  jupiterHeaders: {},
   onFatal: (reason) => {
     console.error(reason);
     process.exit(1);

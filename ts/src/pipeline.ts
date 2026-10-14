@@ -1,9 +1,10 @@
 // The whole path of one event, in order: feed -> dedupe -> store and detect -> rule match ->
-// filters -> build and sign -> land -> report. Decider is the synchronous part (no I/O) that the
-// shared fixtures test; startBot wires it to the feed, the trader, and the exit watcher.
+// execute/trade.ts (filters, build and sign, land, resolve) -> report. Decider is the synchronous
+// part (no I/O) that the shared fixtures test; startBot wires it to the feed and the trader.
+// Reading order: Decider.handle here, then Trader.buy in execute/trade.ts.
 
 import { Keypair } from "@solana/web3.js";
-import { eventRef, postKey, publishedAtMs, type AccountCallout, type AccountFollow, type AccountProfileUpdate, type AccountThesis, type AccountTokenVerified, type Envelope, type TweetContent, type TweetDelete, type TweetMeta, type TweetPin, type TweetUpdate } from "./protocol.ts";
+import { eventRef, payloadProblem, postKey, publishedAtMs, type AccountCallout, type Platform, type AccountFollow, type AccountProfileUpdate, type AccountThesis, type AccountTokenVerified, type Envelope, type TweetContent, type TweetDelete, type TweetMeta, type TweetPin, type TweetUpdate } from "./protocol.ts";
 import type { Config } from "./setup/config.ts";
 import { FeedClient, type Receipt } from "./feed/client.ts";
 import { EventDedupe } from "./feed/dedupe.ts";
@@ -13,9 +14,10 @@ import { calloutActivity, followActivity, fomoActivity, pinActivity, profileActi
 import type { Activity, Signal, SignalSource } from "./detect/types.ts";
 import { RuleIndex } from "./rules/index.ts";
 import { RuleEngine } from "./rules/engine.ts";
-import type { Match, Skip, SkipCode } from "./rules/modes.ts";
-import type { Ledger } from "./rules/ledger.ts";
-import { ChainCache, Trader } from "./execute/trade.ts";
+import type { Fire, Skip, SkipCode } from "./rules/modes.ts";
+import type { TradeBook } from "./execute/trades.ts";
+import { Trader } from "./execute/trade.ts";
+import { ChainCache } from "./execute/cache.ts";
 import { Lander, SignatureWatcher, type SenderTarget } from "./land/land.ts";
 import type { Network } from "./network.ts";
 import { LatencyReport, type Trace } from "./report/latency.ts";
@@ -29,9 +31,10 @@ export type Outcome = {
   duplicate: boolean;
   eventRef: string;
   signals: Signal[];
-  triggers: Match[];
+  fires: Fire[];
   skips: Skip[];
   exits: PlannedExit[];
+  invalid: string | null; // why the payload was skipped, when it was malformed
   publishedAt: number | null; // publish time of a post, for publish -> receipt
   firstContent: boolean; // first tweet/content for this post
 };
@@ -56,7 +59,7 @@ export function signalsJson(o: Outcome): SignalJson[] {
 
 export function decisionsJson(o: Outcome): DecisionJson[] {
   return [
-    ...o.triggers.map((m): DecisionJson => ({ event: o.eventRef, rule: m.rule.name, decision: "fire", mint: m.mint, action: m.rule.token.action, source: m.signal?.source ?? null })),
+    ...o.fires.map((m): DecisionJson => ({ event: o.eventRef, rule: m.rule.name, decision: "fire", mint: m.mint, action: m.rule.token.action, source: m.signal?.source ?? null })),
     ...o.skips.map((s): DecisionJson => ({ event: o.eventRef, rule: s.rule.name, decision: "skip", code: s.code })),
     ...o.exits.map((e): DecisionJson => ({ event: o.eventRef, ...(e.rule ? { rule: e.rule } : {}), decision: "exit", mint: e.mint, code: e.code })),
   ];
@@ -69,19 +72,26 @@ export class Decider {
   private readonly store = new PostStore();
   private readonly engine: RuleEngine;
   private readonly config: Config;
-  private readonly ledger: Ledger;
+  private readonly book: TradeBook;
 
-  constructor(config: Config, ledger: Ledger) {
+  constructor(config: Config, book: TradeBook) {
     this.config = config;
-    this.ledger = ledger;
-    this.engine = new RuleEngine(new RuleIndex(config.rules), ledger, config);
+    this.book = book;
+    this.engine = new RuleEngine(new RuleIndex(config.rules), book, config);
+  }
+
+  // Gives a fire back when it sent nothing: the same key may fire again.
+  release(fire: Fire): void {
+    this.engine.release(fire);
   }
 
   handle(event: Envelope, receipt: Pick<Receipt, "wallMs">): Outcome {
     const ref = eventRef(event);
-    const outcome: Outcome = { duplicate: false, eventRef: ref, signals: [], triggers: [], skips: [], exits: [], publishedAt: null, firstContent: false };
-    if (!this.dedupe.first(event)) return { ...outcome, duplicate: true };
+    const outcome: Outcome = { duplicate: false, eventRef: ref, signals: [], fires: [], skips: [], exits: [], invalid: null, publishedAt: null, firstContent: false };
     const pair = `${event.t}/${event.op}`;
+    outcome.invalid = payloadProblem(pair, event.d);
+    if (outcome.invalid) return outcome;
+    if (!this.dedupe.first(event)) return { ...outcome, duplicate: true };
     let activity: Activity | null = null;
     switch (pair) {
       case "tweet/content":
@@ -106,7 +116,7 @@ export class Decider {
         break;
       case "tweet/delete":
         if (this.config.exits.sellOnDelete) {
-          for (const mint of this.ledger.mintsForPost(postKey(event.d as TweetDelete))) {
+          for (const mint of this.book.exitTargets({ postKey: postKey(event.d as TweetDelete) })) {
             outcome.exits.push({ mint, code: "post_deleted", rule: null, detail: "the post that triggered the buy was deleted" });
           }
         }
@@ -117,8 +127,8 @@ export class Decider {
         break;
       case "account/profile_update": {
         const d = event.d as AccountProfileUpdate;
-        activity = profileActivity(d, this.store.profile(d.actor.id), ref);
-        this.store.updateProfile(d.actor.id, d.changes);
+        activity = profileActivity(d, this.store.profile(d.actor), ref);
+        this.store.updateProfile(d.actor, d.changes);
         break;
       }
       case "account/callout":
@@ -133,11 +143,16 @@ export class Decider {
     if (!activity) return outcome;
     outcome.signals = activity.signals;
     const ageMs = outcome.publishedAt === null ? null : receipt.wallMs - outcome.publishedAt;
-    const result = this.engine.evaluate(activity, { now: receipt.wallMs, ageMs, knownBio: this.store.profile(activity.actor.id)?.bio });
-    outcome.triggers = result.triggers;
+    const platform = activity.actor.namespace === "x" ? "twitter" : activity.actor.namespace;
+    const knownBio = this.store.profile({ id: activity.actor.id, platform: platform as Platform })?.bio;
+    const result = this.engine.evaluate(activity, { now: receipt.wallMs, ageMs, knownBio });
+    outcome.fires = result.fires;
     outcome.skips = result.skips;
+    // A caller or author exit applies only to what this rule bought because of that account.
     for (const exit of result.exits) {
-      if (this.ledger.position(exit.mint)?.rule === exit.rule.name) outcome.exits.push({ mint: exit.mint, code: exit.code, rule: exit.rule.name, detail: exit.detail });
+      if (this.book.exitTargets({ rule: exit.rule.name, actor: exit.actor }).includes(exit.mint)) {
+        outcome.exits.push({ mint: exit.mint, code: exit.code, rule: exit.rule.name, detail: exit.detail });
+      }
     }
     return outcome;
   }
@@ -153,46 +168,47 @@ export class Decider {
 export type BotOptions = {
   config: Config;
   network: Network;
-  ledger: Ledger;
+  book: TradeBook;
   feeds: Array<{ name: string; apiKey: string }>;
   wsUrl: string;
   dryRun: boolean;
   wallet: Keypair | null; // required when dryRun is false
   senders: SenderTarget[];
   rpcWsUrl: string;
-  jitoEnabled: boolean;
-  jupiterHeaders: Record<string, string>;
   heartbeatMs?: number;
   onFatal: (reason: string) => void;
 };
 
 export type RunningBot = { stop(): void; report: LatencyReport };
 
-export function startBot(o: BotOptions): RunningBot {
+export async function startBot(o: BotOptions): Promise<RunningBot> {
   const report = new LatencyReport();
   const cache = new ChainCache(o.network);
   cache.start(o.config.execution.blockhashRefreshMs);
+  await cache.ready();
   let watcher: SignatureWatcher | null = null;
   let lander: Lander | null = null;
   if (!o.dryRun) {
     watcher = new SignatureWatcher(o.rpcWsUrl);
     watcher.start();
-    lander = new Lander(o.senders, watcher, { ...o.config.execution, currentBlockHeight: () => cache.currentBlockHeight() });
+    const statusRpcUrl = o.senders.find((s) => s.kind === "rpc")?.url ?? null;
+    lander = new Lander(watcher, { ...o.config.execution, currentBlockHeight: () => cache.blockHeight(), statusRpcUrl });
   }
+  const decider = new Decider(o.config, o.book);
   const trader = new Trader({
     config: o.config,
     network: o.network,
-    ledger: o.ledger,
+    book: o.book,
     cache,
     report,
     wallet: o.wallet ?? Keypair.generate(),
     dryRun: o.dryRun,
     lander,
-    jitoEnabled: o.jitoEnabled,
-    jupiterHeaders: o.jupiterHeaders,
+    senders: o.senders,
+    releaseFire: (fire) => decider.release(fire),
   });
-  const decider = new Decider(o.config, o.ledger);
-  const exits = new ExitWatcher(o.config, o.ledger, o.network, trader);
+  trader.start();
+  const exits = new ExitWatcher(o.config, o.book, o.network, cache, trader);
   exits.start();
 
   const onEvent = (event: Envelope, receipt: Receipt) => {
@@ -200,44 +216,46 @@ export function startBot(o: BotOptions): RunningBot {
       if (event.op === "auth_pong") log("auth", `${receipt.connection} authenticated`);
       return;
     }
-    const outcome = decider.handle(event, receipt);
+    let outcome: Outcome;
+    try {
+      outcome = decider.handle(event, receipt);
+    } catch (error) {
+      return log("skip", `${event.t}/${event.op}: could not process the event: ${(error as Error).message}`);
+    }
     const decidedNs = process.hrtime.bigint();
+    if (outcome.invalid) return log("skip", `${event.t}/${event.op}: ${outcome.invalid}`);
     if (outcome.duplicate) return;
     // Trades start before anything is logged: console output is synchronous and slow.
-    for (const m of outcome.triggers) {
-      const trace: Trace = {
-        mint: m.mint,
-        rule: m.rule.name,
-        connection: receipt.connection,
-        publishedAtWall: outcome.publishedAt,
-        receivedWall: receipt.wallMs,
-        receivedNs: receipt.monoNs,
-        decidedNs,
-      };
-      const run = m.rule.token.action === "buy" ? trader.buy(m, trace) : trader.sell(m.mint, `rule ${m.rule.name}`);
-      run.catch((error: Error) => log("error", `${m.rule.name}: ${error.message}`));
+    for (const fire of outcome.fires) {
+      const trace: Trace = { mint: fire.mint, rule: fire.rule.name, connection: receipt.connection, eventRef: outcome.eventRef, publishedAtWall: outcome.publishedAt, receivedWall: receipt.wallMs, receivedNs: receipt.monoNs, decidedNs };
+      const run =
+        fire.rule.token.action === "buy"
+          ? trader.buy(fire, trace)
+          : trader.sell(fire.mint, `rule ${fire.rule.name}`).then((r) => {
+              if (r === "no_position") decider.release(fire); // nothing to sell: the fire is given back
+            });
+      run.catch((error: Error) => log("error", `${fire.rule.name}: ${error.message}`));
     }
-    for (const e of outcome.exits) trader.sell(e.mint, e.code).catch((error: Error) => log("error", `exit ${short(e.mint)}: ${error.message}`));
+    for (const e of outcome.exits) trader.exit(e.mint, e.code, e.detail).catch((error: Error) => log("error", `exit ${short(e.mint)}: ${error.message}`));
     report.recordFirstCopy(receipt.connection);
     if (outcome.firstContent && outcome.publishedAt !== null) report.recordPost(receipt.connection, receipt.wallMs - outcome.publishedAt);
     for (const s of outcome.signals) log("signal", `${s.source} ${short(s.mint)} from ${s.actor.handle ? `@${s.actor.handle}` : s.actor.namespace} (${s.eventRef})`);
     for (const s of outcome.skips) log("skip", `${s.rule.name}: ${s.code}, ${s.detail}`);
-    for (const m of outcome.triggers) log("fire", `${m.rule.name}: ${m.rule.token.action} ${short(m.mint)}, ${m.detail}`);
+    for (const f of outcome.fires) log("fire", `${f.rule.name}: ${f.rule.token.action} ${short(f.mint)}, ${f.detail}`);
     for (const e of outcome.exits) log("exit", `${short(e.mint)}: ${e.code}, ${e.detail}`);
   };
 
-  const feeds = o.feeds.map(
-    (f) => new FeedClient({ name: f.name, apiKey: f.apiKey, url: o.wsUrl, heartbeatMs: o.heartbeatMs ?? 30_000, onEvent, onFatal: o.onFatal }),
-  );
+  const feeds = o.feeds.map((f) => new FeedClient({ name: f.name, apiKey: f.apiKey, url: o.wsUrl, heartbeatMs: o.heartbeatMs ?? 30_000, onEvent, onFatal: o.onFatal }));
   for (const feed of feeds) feed.start();
   return {
     report,
     stop() {
       for (const feed of feeds) feed.stop();
       exits.stop();
+      trader.stop();
       cache.stop();
       watcher?.stop();
-      o.ledger.flushSync();
+      o.book.flush();
     },
   };
 }

@@ -58,10 +58,11 @@ export function readEnv(): Env {
 }
 
 const UTM = "utm_source=github&utm_medium=referral&utm_campaign=solana-sniper-bot";
-export const trialLink = (placement: string) => `https://tweetstream.io/signup?offer=basic-monthly-trial&${UTM}&utm_content=${placement}`;
-export const ultraTrialLink = (placement: string) =>
-  `https://tweetstream.io/signup?intent=ultra_speed&ultraBilling=MONTHLY&${UTM}&utm_content=${placement}`;
-const DASHBOARD_KEYS = "https://tweetstream.io/dashboard?tab=api";
+// Every tweetstream.io link the bot prints carries the same campaign and a placement name.
+export const productLink = (path: string, placement: string) => `https://tweetstream.io${path}${path.includes("?") ? "&" : "?"}${UTM}&utm_content=${placement}`;
+export const trialLink = (placement: string) => productLink("/signup?offer=basic-monthly-trial", placement);
+export const ultraTrialLink = (placement: string) => productLink("/signup?intent=ultra_speed&ultraBilling=MONTHLY", placement);
+const DASHBOARD_KEYS = productLink("/dashboard?tab=api", "cli-missing-key");
 
 export const SETUP_HELP = `
 No TweetStream API key found. The bot needs one to read the live feed.

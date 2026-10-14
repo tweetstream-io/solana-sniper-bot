@@ -1,9 +1,10 @@
-// Answers every read the bot makes from a scenario's "chain" block, so the demo and the benchmark
-// run the real pipeline with no network. Account bytes use the on-chain layouts the gate parses.
+// Answers every call the bot makes from a scenario's "chain" block, so the demo, the benchmark, and
+// the trade tests run the real pipeline with no network. Account bytes use the on-chain layouts the
+// bot parses. Signature statuses, debits, and balances start empty; tests fill them to play the chain.
 
 import bs58 from "bs58";
-import { bondingCurveAddress, lamportsForTokens, parseCurve, PUMP_PROGRAM, TOKEN_2022_PROGRAM, TOKEN_PROGRAM, tokensForLamports } from "../src/execute/pump.ts";
-import type { AccountData, MarketSnapshot, Network, RugcheckSummary } from "../src/network.ts";
+import { bondingCurveAddress, curveFeeBps, FEE_CONFIG, lamportsForTokens, parseCurve, parseFeeConfig, PUMP_PROGRAM, TOKEN_2022_PROGRAM, TOKEN_PROGRAM } from "../src/execute/pump.ts";
+import type { AccountData, JupiterExecute, JupiterOrder, MarketSnapshot, Network, RugcheckSummary } from "../src/network.ts";
 
 export type MintSpec = {
   tokenProgram: "spl" | "token-2022";
@@ -13,7 +14,15 @@ export type MintSpec = {
   decimals: number;
   curve: null | { virtualTokenReserves: string; virtualQuoteReserves: string; realTokenReserves: string; realQuoteReserves: string; tokenTotalSupply: string; complete: boolean };
 };
-export type Chain = { solUsd: number; priorityFeeMicroLamports: number; tipFloorSol: number; blockHeight: number; mints: Record<string, MintSpec> };
+export type ScenarioChain = {
+  solUsd: number;
+  priorityFeeMicroLamports: number;
+  tipFloorSol: number;
+  blockHeight: number;
+  epoch: number;
+  feeTiers: Array<{ marketCapLamportsThreshold: string; protocolFeeBps: number; creatorFeeBps: number }>;
+  mints: Record<string, MintSpec>;
+};
 
 const CURVE_DISCRIMINATOR = [23, 183, 248, 55, 96, 216, 172, 96];
 
@@ -28,6 +37,22 @@ function mintBytes(m: MintSpec): Uint8Array {
   return data;
 }
 
+// pump.fun FeeConfig: discriminator, bump, admin, flat fees, then the tier list (see execute/pump.ts).
+function feeConfigBytes(tiers: ScenarioChain["feeTiers"]): Uint8Array {
+  const data = Buffer.alloc(69 + tiers.length * 40);
+  Buffer.from([143, 52, 146, 187, 219, 123, 76, 155]).copy(data, 0);
+  data.writeUInt32LE(tiers.length, 65);
+  tiers.forEach((t, i) => {
+    const at = 69 + i * 40;
+    const threshold = BigInt(t.marketCapLamportsThreshold);
+    data.writeBigUInt64LE(threshold & ((1n << 64n) - 1n), at);
+    data.writeBigUInt64LE(threshold >> 64n, at + 8);
+    data.writeBigUInt64LE(BigInt(t.protocolFeeBps), at + 24);
+    data.writeBigUInt64LE(BigInt(t.creatorFeeBps), at + 32);
+  });
+  return data;
+}
+
 function curveBytes(c: NonNullable<MintSpec["curve"]>): Uint8Array {
   const data = Buffer.alloc(115);
   Buffer.from(CURVE_DISCRIMINATOR).copy(data, 0);
@@ -37,11 +62,17 @@ function curveBytes(c: NonNullable<MintSpec["curve"]>): Uint8Array {
 }
 
 export class ScenarioNetwork implements Network {
-  private readonly accounts = new Map<string, AccountData>();
-  private readonly chain: Chain;
+  readonly accounts = new Map<string, AccountData>();
+  readonly statuses = new Map<string, { confirmed: boolean; err: unknown }>(); // signature -> status
+  readonly debits = new Map<string, bigint>(); // signature -> lamports taken from the wallet
+  readonly balances = new Map<string, bigint>(); // mint -> token balance of the wallet
+  blockHeight: number;
+  private readonly chain: ScenarioChain;
 
-  constructor(chain: Chain) {
+  constructor(chain: ScenarioChain) {
     this.chain = chain;
+    this.blockHeight = chain.blockHeight;
+    this.accounts.set(FEE_CONFIG.toBase58(), { owner: "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ", data: feeConfigBytes(chain.feeTiers) });
     for (const [mint, spec] of Object.entries(chain.mints)) {
       const owner = (spec.tokenProgram === "spl" ? TOKEN_PROGRAM : TOKEN_2022_PROGRAM).toBase58();
       this.accounts.set(mint, { owner, data: mintBytes(spec) });
@@ -53,7 +84,25 @@ export class ScenarioNetwork implements Network {
     return addresses.map((a) => this.accounts.get(a) ?? null);
   }
   async latestBlockhash() {
-    return { blockhash: bs58.encode(Buffer.alloc(32, 7)), lastValidBlockHeight: this.chain.blockHeight + 150 };
+    return { blockhash: bs58.encode(Buffer.alloc(32, 7)), lastValidBlockHeight: this.blockHeight + 150 };
+  }
+  async epochInfo() {
+    return { epoch: this.chain.epoch, blockHeight: this.blockHeight };
+  }
+  async signatureStatus(signature: string) {
+    return this.statuses.get(signature) ?? null;
+  }
+  async transactionDebit(signature: string) {
+    return this.debits.get(signature) ?? null;
+  }
+  async pumpPortalTx(): Promise<Uint8Array> {
+    throw new Error("the scenario has no PumpPortal");
+  }
+  async jupiterOrder(_q: Parameters<Network["jupiterOrder"]>[0]): Promise<JupiterOrder> {
+    throw new Error("the scenario has no Jupiter route");
+  }
+  async jupiterExecute(): Promise<JupiterExecute> {
+    throw new Error("the scenario has no Jupiter route");
   }
   async recentPriorityFees() {
     return [this.chain.priorityFeeMicroLamports];
@@ -72,14 +121,11 @@ export class ScenarioNetwork implements Network {
   }
   async quoteSellLamports(mint: string, tokens: bigint) {
     const curve = this.curve(mint);
-    return curve ? lamportsForTokens(curve, tokens) : null;
+    const tiers = parseFeeConfig(this.accounts.get(FEE_CONFIG.toBase58())!.data);
+    return curve && tiers ? lamportsForTokens(curve, tokens, curveFeeBps(tiers, curve)) : null;
   }
-  async quoteBuyTokens(mint: string, lamports: bigint) {
-    const curve = this.curve(mint);
-    return curve ? tokensForLamports(curve, lamports) : null;
-  }
-  async tokenBalance() {
-    return 0n;
+  async tokenBalance(_owner: string, mint: string) {
+    return this.balances.get(mint) ?? 0n;
   }
   private curve(mint: string) {
     const account = this.accounts.get(bondingCurveAddress(mint).toBase58());

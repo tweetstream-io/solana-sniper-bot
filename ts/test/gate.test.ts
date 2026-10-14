@@ -25,8 +25,9 @@ function mint(owner: string, { mintAuthority = false, freezeAuthority = false, f
   return { owner, data: Buffer.concat([base, Buffer.alloc(83), Buffer.from([1]), tlv]) };
 }
 
-function liveCurve(): AccountData {
+function liveCurve(quoteMint?: Buffer): AccountData {
   const data = Buffer.alloc(115);
+  if (quoteMint) quoteMint.copy(data, 83); // quote_mint; all zeros means SOL
   Buffer.from([23, 183, 248, 55, 96, 216, 172, 96]).copy(data, 0);
   data.writeBigUInt64LE(10n ** 15n, 8); // virtual token reserves
   data.writeBigUInt64LE(32n * 10n ** 9n, 16); // virtual SOL reserves: 32 SOL
@@ -35,7 +36,7 @@ function liveCurve(): AccountData {
   return { owner: "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", data };
 }
 
-function network(accounts: Record<string, AccountData>, delayMs = 0): Network {
+function network(accounts: Record<string, AccountData>, delayMs = 0, rug: { score: number | null; dangers: string[] } | null = null): Network {
   const never = () => new Promise<never>(() => {});
   return {
     getAccounts: async (addresses, signal) => {
@@ -46,24 +47,29 @@ function network(accounts: Record<string, AccountData>, delayMs = 0): Network {
       return addresses.map((a) => accounts[a] ?? null);
     },
     marketSnapshot: async () => ({}),
-    rugcheck: async () => null,
+    rugcheck: async () => rug,
     latestBlockhash: never,
+    epochInfo: never,
+    signatureStatus: never,
+    transactionDebit: never,
+    pumpPortalTx: never,
+    jupiterOrder: never,
+    jupiterExecute: never,
     recentPriorityFees: never,
     jitoTipFloorSol: never,
     solUsdPrice: never,
     quoteSellLamports: never,
-    quoteBuyTokens: never,
     tokenBalance: never,
   };
 }
 
 const rule = (filters: object = {}) => parseConfig({ rules: [{ name: "r", mode: "ca_scanner", accounts: ["1"], filters }] }).rules[0]!;
-const deps = (net: Network, budgetMs = 100): GateDeps => ({
+const deps = (net: Network, budgetMs = 100, safety: object = {}): GateDeps => ({
   network: net,
-  safety: parseConfig({ rules: [{ name: "r", mode: "ca_scanner", accounts: ["1"] }], safety: { budgetMs } }).safety,
+  safety: parseConfig({ rules: [{ name: "r", mode: "ca_scanner", accounts: ["1"] }], safety: { budgetMs, ...safety } }).safety,
   pumpBuilder: "local",
   solUsd: () => 150,
-  holding: () => false,
+  epoch: () => 850,
 });
 const curveKey = bondingCurveAddress(MINT).toBase58();
 
@@ -104,4 +110,17 @@ test("a 2.5% transfer fee fails the default maxPoolTaxPct of 0", async () => {
   const result = await runGate(MINT, rule(), null, deps(network({ [MINT]: mint(T22, { feeBps: 250 }) })));
   assert.equal(result.pass === false && result.code, "filter_tax");
   assert.equal(result.facts.taxPct, 2.5);
+});
+
+test("a curve paired with another token is not priced in SOL, so a market cap filter has no data", async () => {
+  const usdcPaired = liveCurve(Buffer.alloc(32, 1));
+  const result = await runGate(MINT, rule({ maxMarketCapUsd: 1_000_000 }), null, deps(network({ [MINT]: mint(T22), [curveKey]: usdcPaired })));
+  assert.equal(result.pass === false && result.code, "missing_data");
+  assert.equal(result.facts.marketCapUsd, undefined);
+});
+
+test("a required Rugcheck report without a score counts as unknown when a score limit is set", async () => {
+  const net = network({ [MINT]: mint(SPL) }, 0, { score: null, dangers: [] });
+  const result = await runGate(MINT, rule(), null, deps(net, 100, { rugcheck: "required", maxRugcheckScore: 50 }));
+  assert.equal(result.pass === false && result.code, "check_unknown");
 });

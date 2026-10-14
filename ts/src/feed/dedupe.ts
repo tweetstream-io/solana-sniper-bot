@@ -10,7 +10,9 @@ function dedupeKey(event: Envelope): string | null {
   const pair = `${event.t}/${event.op}`;
   if (pair === "tweet/update" || pair === "tweet/meta") return event.id ? `${pair} id:${event.id}` : null;
   const eventId = (event.d as { eventId?: unknown } | null)?.eventId;
-  return typeof eventId === "string" ? `${pair} ${eventId}` : eventRef(event);
+  if (typeof eventId === "string") return `${pair} ${eventId}`;
+  const ref = eventRef(event);
+  return ref.endsWith(" ") ? null : ref; // no id anywhere: never deduplicated
 }
 
 export class EventDedupe {

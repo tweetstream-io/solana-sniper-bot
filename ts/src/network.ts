@@ -1,6 +1,7 @@
-// Every read the bot makes from outside the process: Solana RPC, Jupiter quotes and prices, Jito
-// tip levels, DexScreener pools, Rugcheck. LiveNetwork calls the real services; the demo
-// (scripts/demo.ts) supplies a scripted one, so a dry run can work with no network at all.
+// Every call the bot makes to a service except sending a signed transaction: Solana RPC reads,
+// Jupiter quotes, orders and executes, PumpPortal builds, Jito tip levels, DexScreener, Rugcheck.
+// LiveNetwork calls the real services; scripts/scenario-network.ts answers from a scenario file,
+// so the demo, the benchmark, and the trade tests run with no network. land/land.ts sends.
 
 export type AccountData = { owner: string; data: Uint8Array };
 
@@ -13,10 +14,24 @@ export type MarketSnapshot = {
 
 export type RugcheckSummary = { score: number | null; dangers: string[] };
 
+// GET /swap/v2/order. transaction is null or "" when Jupiter cannot build one (see errorMessage).
+export type JupiterOrder = { transaction: string | null; requestId: string; lastValidBlockHeight?: number; errorMessage?: string };
+// POST /swap/v2/execute. code 0 is success; https://developers.jup.ag/docs/swap/order-and-execute.
+export type JupiterExecute = { status: string; code: number; signature?: string; error?: string; totalOutputAmount?: string; totalInputAmount?: string };
+
 export interface Network {
   // Several accounts in one round trip, at "processed": a mint created in the last slot is there.
   getAccounts(addresses: string[], signal?: AbortSignal): Promise<Array<AccountData | null>>;
   latestBlockhash(): Promise<{ blockhash: string; lastValidBlockHeight: number }>;
+  epochInfo(): Promise<{ epoch: number; blockHeight: number }>;
+  // Status of a sent transaction: null when the RPC has not seen it.
+  signatureStatus(signature: string): Promise<{ confirmed: boolean; err: unknown } | null>;
+  // How many lamports the transaction took from `owner` (fees, tips, rent, principal). null: not found.
+  transactionDebit(signature: string, owner: string): Promise<bigint | null>;
+  // An unsigned transaction from the PumpPortal local trading API.
+  pumpPortalTx(body: Record<string, string | number>): Promise<Uint8Array>;
+  jupiterOrder(q: { inputMint: string; outputMint: string; amount: bigint; taker: string }): Promise<JupiterOrder>;
+  jupiterExecute(signedTx: string, requestId: string, timeoutMs: number): Promise<JupiterExecute>;
   recentPriorityFees(): Promise<number[]>; // micro-lamports per compute unit, recent slots
   jitoTipFloorSol(): Promise<number | null>;
   solUsdPrice(): Promise<number | null>;
@@ -24,7 +39,6 @@ export interface Network {
   rugcheck(mint: string, signal?: AbortSignal): Promise<RugcheckSummary | null>;
   // What selling `tokens` of `mint` for SOL would return now, from a Jupiter quote. null: no route.
   quoteSellLamports(mint: string, tokens: bigint, signal?: AbortSignal): Promise<bigint | null>;
-  quoteBuyTokens(mint: string, lamports: bigint, signal?: AbortSignal): Promise<bigint | null>;
   tokenBalance(owner: string, mint: string): Promise<bigint>;
 }
 
@@ -72,6 +86,56 @@ export class LiveNetwork implements Network {
 
   // No account filter: a filter only counts transactions that lock every listed account as
   // writable, and the accounts every pump.fun trade shares (program, global, fee config) are read-only.
+  async epochInfo(): Promise<{ epoch: number; blockHeight: number }> {
+    return rpcCall(this.rpcUrl, "getEpochInfo", [{ commitment: "confirmed" }]);
+  }
+
+  async signatureStatus(signature: string): Promise<{ confirmed: boolean; err: unknown } | null> {
+    type Raw = { value: Array<{ confirmationStatus?: string; err: unknown } | null> };
+    const value = (await rpcCall<Raw>(this.rpcUrl, "getSignatureStatuses", [[signature], { searchTransactionHistory: true }])).value[0];
+    if (!value) return null;
+    return { confirmed: value.confirmationStatus === "confirmed" || value.confirmationStatus === "finalized", err: value.err };
+  }
+
+  async transactionDebit(signature: string, owner: string): Promise<bigint | null> {
+    type Raw = { meta: { preBalances: number[]; postBalances: number[] }; transaction: { message: { accountKeys: Array<string | { pubkey: string }> } } } | null;
+    const tx = await rpcCall<Raw>(this.rpcUrl, "getTransaction", [signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0, encoding: "jsonParsed" }]);
+    if (!tx) return null;
+    const i = tx.transaction.message.accountKeys.findIndex((k) => (typeof k === "string" ? k : k.pubkey) === owner);
+    return i < 0 ? null : BigInt(tx.meta.preBalances[i]! - tx.meta.postBalances[i]!);
+  }
+
+  // PumpPortal local trading API (https://pumpportal.fun/local-trading-api/trading-api/).
+  async pumpPortalTx(body: Record<string, string | number>): Promise<Uint8Array> {
+    const response = await fetch("https://pumpportal.fun/api/trade-local", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (response.status !== 200) throw new Error(`PumpPortal HTTP ${response.status}`);
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  async jupiterOrder(q: { inputMint: string; outputMint: string; amount: bigint; taker: string }): Promise<JupiterOrder> {
+    const query = new URLSearchParams({ inputMint: q.inputMint, outputMint: q.outputMint, amount: q.amount.toString(), taker: q.taker });
+    const response = await fetch(`${JUPITER}/swap/v2/order?${query}`, { headers: this.jupiterHeaders(), signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) throw new Error(`Jupiter /order HTTP ${response.status}`);
+    return (await response.json()) as JupiterOrder;
+  }
+
+  // Throws when the answer is missing or unreadable; the caller treats that as an unknown outcome.
+  async jupiterExecute(signedTx: string, requestId: string, timeoutMs: number): Promise<JupiterExecute> {
+    const response = await fetch(`${JUPITER}/swap/v2/execute`, {
+      method: "POST",
+      headers: { ...this.jupiterHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ signedTransaction: signedTx, requestId }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) throw new Error(`Jupiter /execute HTTP ${response.status}`);
+    return (await response.json()) as JupiterExecute;
+  }
+
   async recentPriorityFees(): Promise<number[]> {
     const result = await rpcCall<Array<{ prioritizationFee: number }>>(this.rpcUrl, "getRecentPrioritizationFees", []);
     return result.map((r) => r.prioritizationFee);
@@ -132,10 +196,6 @@ export class LiveNetwork implements Network {
     return this.quote(mint, WSOL, tokens, signal);
   }
 
-  async quoteBuyTokens(mint: string, lamports: bigint, signal?: AbortSignal): Promise<bigint | null> {
-    return this.quote(WSOL, mint, lamports, signal);
-  }
-
   private async quote(inputMint: string, outputMint: string, amount: bigint, signal?: AbortSignal): Promise<bigint | null> {
     const query = new URLSearchParams({ inputMint, outputMint, amount: amount.toString() });
     const response = await fetch(`${JUPITER}/swap/v2/order?${query}`, { headers: this.jupiterHeaders(), signal: signal ?? AbortSignal.timeout(5_000) });
@@ -145,7 +205,7 @@ export class LiveNetwork implements Network {
   }
 
   // The keyless tier allows 0.5 requests per second; a free key raises that.
-  jupiterHeaders(): Record<string, string> {
+  private jupiterHeaders(): Record<string, string> {
     return this.jupiterApiKey ? { "x-api-key": this.jupiterApiKey } : {};
   }
 }

@@ -1,6 +1,7 @@
-// Builds pump.fun bonding-curve trades locally, with no HTTP round trip to a trade API.
-// Layouts and accounts follow the official pump-fun/pump-public-docs repo (idl/pump.json,
-// docs/instructions/TRADE_V3.md, docs/FEE_RECIPIENTS.md). Next: execute/build.ts signs the transaction.
+// Builds pump.fun bonding-curve trades locally, with no HTTP round trip to a trade API, and quotes
+// them with the program's fee tiers. Layouts follow pump-fun/pump-public-docs (idl/pump.json,
+// docs/instructions/TRADE_V3.md, docs/FEE_RECIPIENTS.md, docs/FEE_PROGRAM_README.md).
+// Used by execute/trade.ts, which signs and sends.
 
 import { PublicKey, TransactionInstruction } from "@solana/web3.js";
 
@@ -28,6 +29,7 @@ const BUYBACK_FEE_RECIPIENTS = [
 const BUY_EXACT_QUOTE_IN_V3 = Buffer.from([225, 247, 80, 30, 213, 179, 132, 136]);
 const SELL_V3 = Buffer.from([28, 146, 222, 119, 38, 196, 105, 213]);
 const BONDING_CURVE_ACCOUNT = Buffer.from([23, 183, 248, 55, 96, 216, 172, 96]);
+const FEE_CONFIG_ACCOUNT = Buffer.from([143, 52, 146, 187, 219, 123, 76, 155]);
 
 const pda = (seeds: Array<Buffer | Uint8Array>, program = PUMP_PROGRAM) => PublicKey.findProgramAddressSync(seeds, program)[0];
 
@@ -109,12 +111,42 @@ export function localBuildBlocker(curve: Curve): string | null {
   return null;
 }
 
-// Constant-product quotes on the virtual reserves. Fees are left out, so the estimate is a little
-// high; the slippage tolerance covers the difference (about 1.25% at the time of writing).
-export const tokensForLamports = (c: Curve, lamports: bigint): bigint =>
-  (c.virtualTokenReserves * lamports) / (c.virtualQuoteReserves + lamports);
-export const lamportsForTokens = (c: Curve, tokens: bigint): bigint =>
-  (c.virtualQuoteReserves * tokens) / (c.virtualTokenReserves + tokens);
+// FeeConfig account (idl/pump.json): discriminator, bump u8, admin pubkey, flat fees (3 x u64),
+// then fee_tiers: a u32 count and, per tier, a u128 market-cap threshold in lamports and
+// lp, protocol, and creator fees in basis points (3 x u64).
+export type FeeTier = { threshold: bigint; protocolBps: bigint; creatorBps: bigint };
+
+export function parseFeeConfig(data: Uint8Array): FeeTier[] | null {
+  if (data.length < 69 || !Buffer.from(data.subarray(0, 8)).equals(FEE_CONFIG_ACCOUNT)) return null;
+  const view = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  const count = view.readUInt32LE(65);
+  if (count === 0 || 69 + count * 40 > data.length) return null;
+  const tiers: FeeTier[] = [];
+  for (let i = 0, at = 69; i < count; i++, at += 40) {
+    const threshold = view.readBigUInt64LE(at) + (view.readBigUInt64LE(at + 8) << 64n);
+    tiers.push({ threshold, protocolBps: view.readBigUInt64LE(at + 24), creatorBps: view.readBigUInt64LE(at + 32) });
+  }
+  return tiers;
+}
+
+// The protocol plus creator fee for a curve, chosen by market cap in lamports
+// (virtual SOL x supply / virtual tokens), as calculateFeeTier in FEE_PROGRAM_README.md does.
+export function curveFeeBps(tiers: FeeTier[], c: Curve): bigint {
+  const cap = (c.virtualQuoteReserves * c.tokenTotalSupply) / c.virtualTokenReserves;
+  const tier = cap < tiers[0]!.threshold ? tiers[0]! : ([...tiers].reverse().find((t) => cap >= t.threshold) ?? tiers[0]!);
+  return tier.protocolBps + tier.creatorBps;
+}
+
+// Constant-product quotes on the virtual reserves, after fees. A buy spends `lamports` including
+// fees, so the curve sees lamports / (1 + fee); a sell pays the fee out of what the curve returns.
+export const tokensForLamports = (c: Curve, lamports: bigint, feeBps: bigint): bigint => {
+  const net = (lamports * 10_000n) / (10_000n + feeBps);
+  return (c.virtualTokenReserves * net) / (c.virtualQuoteReserves + net);
+};
+export const lamportsForTokens = (c: Curve, tokens: bigint, feeBps: bigint): bigint => {
+  const gross = (c.virtualQuoteReserves * tokens) / (c.virtualTokenReserves + tokens);
+  return gross - (gross * feeBps + 9_999n) / 10_000n;
+};
 
 export const withSlippage = (amount: bigint, pct: number): bigint => (amount * BigInt(Math.round((100 - pct) * 100))) / 10_000n;
 

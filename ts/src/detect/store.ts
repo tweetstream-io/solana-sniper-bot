@@ -20,7 +20,7 @@ const MAX_PROFILES = 20_000;
 
 export class PostStore {
   private readonly posts = new Map<string, Entry>();
-  private readonly profiles = new Map<string, ProfileFields>(); // account id -> last known fields
+  private readonly profiles = new Map<string, ProfileFields>(); // "platform:id" -> last known fields
 
   get(key: string): Entry | undefined {
     return this.posts.get(key);
@@ -50,12 +50,14 @@ export class PostStore {
     return entry;
   }
 
-  profile(accountId: string | undefined): ProfileFields | undefined {
-    return accountId ? this.profiles.get(accountId) : undefined;
+  // Profiles are keyed by platform and id, so accounts on two platforms with one id stay apart.
+  profile(account: Pick<Author, "id" | "platform"> | undefined): ProfileFields | undefined {
+    return account?.id ? this.profiles.get(`${account.platform ?? "twitter"}:${account.id}`) : undefined;
   }
 
-  updateProfile(accountId: string | undefined, fields: ProfileFields): void {
-    if (!accountId) return;
+  updateProfile(account: Pick<Author, "id" | "platform">, fields: ProfileFields): void {
+    if (!account.id) return;
+    const accountId = `${account.platform ?? "twitter"}:${account.id}`;
     const merged = { ...this.profiles.get(accountId), ...defined(fields) };
     this.profiles.delete(accountId); // re-insert so the newest profile is evicted last
     this.profiles.set(accountId, merged);
@@ -65,7 +67,7 @@ export class PostStore {
   // Posts carry the author's current bio and name, which seeds the profile diff baseline.
   private rememberAuthor(author: Author | undefined): void {
     if (!author?.id) return;
-    this.updateProfile(author.id, { bio: author.bio, name: author.name, handle: author.handle });
+    this.updateProfile(author, { bio: author.bio, name: author.name, handle: author.handle });
   }
 
   private entry(key: string): Entry {

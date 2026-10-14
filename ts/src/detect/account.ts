@@ -3,7 +3,7 @@
 
 import type { AccountCallout, AccountFollow, AccountProfileUpdate, AccountThesis, AccountTokenVerified, ProfileFields, TweetPin } from "../protocol.ts";
 import { normalizeHandle } from "../protocol.ts";
-import { addressesFromUrl, DENYLIST, findAddresses, findAll, isEvmAddress, isSolanaAddress, type FoundAddress } from "./addresses.ts";
+import { addressesFromUrl, classifyAddress, findAddresses, findAll, type FoundAddress } from "./addresses.ts";
 import { firstPerMint, makeSignal, xActor } from "./post.ts";
 import type { Actor, CalloutActivity, Confidence, FollowActivity, FomoActivity, PinActivity, ProfileActivity, ProfileField } from "./types.ts";
 
@@ -22,23 +22,26 @@ export function followActivity(d: AccountFollow, op: "follow" | "unfollow", even
 const PROFILE_FIELDS: ProfileField[] = ["avatar", "banner", "name", "bio", "websiteUrl"];
 const CA_FIELDS = ["bio", "name", "websiteUrl"] as const;
 
-// account/profile_update. Lists the changed fields and the addresses that are new compared with
-// the previous value (from the payload's `previous`, else what this process saw earlier).
+// account/profile_update. A field's baseline is the payload's `previous` value when it has one,
+// else the value this process saw last for the account. The same baseline decides which fields
+// changed and which addresses are new.
 export function profileActivity(d: AccountProfileUpdate, known: ProfileFields | undefined, eventRef: string): ProfileActivity {
   const actor = xActor(d.actor);
-  const changed = PROFILE_FIELDS.filter((f) => f in d.changes && d.changes[f] !== d.previous?.[f]);
+  const baseline = (field: ProfileField) => {
+    if (d.previous !== undefined && field in d.previous) return { known: true, value: d.previous[field] };
+    return { known: known?.[field] !== undefined, value: known?.[field] };
+  };
+  const changed = PROFILE_FIELDS.filter((f) => f in d.changes && d.changes[f] !== baseline(f).value);
   const signals = [];
   for (const field of CA_FIELDS) {
     if (!(field in d.changes)) continue;
-    const hasPrevious = d.previous !== undefined && field in d.previous;
-    const prior = hasPrevious ? d.previous?.[field] : known?.[field];
-    const priorKnown = hasPrevious || (known !== undefined && known[field] !== undefined);
-    const old = new Set(fieldAddresses(field, prior).map((f) => f.address));
+    const prior = baseline(field);
+    const old = new Set(fieldAddresses(field, prior.value).map((f) => f.address));
     for (const f of fieldAddresses(field, d.changes[field])) {
       if (old.has(f.address)) continue;
       // Without a baseline the address may have been there all along, so trust it less.
-      const confidence: Confidence = !priorKnown ? "low" : field === "name" ? "medium" : "high";
-      signals.push(makeSignal("profile", f, actor, eventRef, confidence, `added to ${field}${priorKnown ? "" : " (no earlier value seen)"}`));
+      const confidence: Confidence = !prior.known ? "low" : field === "name" ? "medium" : "high";
+      signals.push(makeSignal("profile", f, actor, eventRef, confidence, `added to ${field}${prior.known ? "" : " (no earlier value seen)"}`));
     }
   }
   const bio = changed.includes("bio") ? (d.changes.bio ?? "") : null;
@@ -58,12 +61,9 @@ export function pinActivity(d: TweetPin, postKey: string, eventRef: string): Pin
   return { type: "pin", actor, eventRef, signals };
 }
 
-// The chain of an address: Solana when it decodes to 32 bytes, EVM when it is 0x + 40 hex.
 function tokenSignal(source: "callout" | "fomo", address: string, actor: Actor, eventRef: string, detail: string, marketCapUsd: number | undefined) {
-  const chain = isSolanaAddress(address) ? "solana" : isEvmAddress(address) ? "evm" : null;
-  if (!chain || DENYLIST.has(address)) return [];
-  const mint = chain === "evm" ? address.toLowerCase() : address;
-  return [makeSignal(source, { chain, address: mint }, actor, eventRef, "high", detail, { marketCapUsd })];
+  const hit = classifyAddress(address);
+  return hit ? [makeSignal(source, hit, actor, eventRef, "high", detail, { marketCapUsd })] : [];
 }
 
 // account/callout and account/callout_update. An update enriches an earlier callout; rules never

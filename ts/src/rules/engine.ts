@@ -1,12 +1,12 @@
 // Matches one activity against the rules that listen to its account, then applies the limits
-// that need memory: fire once per post or event, cooldown, and max snipes. Synchronous: no await
-// happens between "this rule fires" and "the slot is taken". Next: filters/gate.ts.
+// that need memory: fire once per key, cooldown, and max snipes. Synchronous: no await happens
+// between "this rule fires" and "the slot is taken". Next: execute/trade.ts runs each fire.
 
-import type { Config, Rule } from "../setup/config.ts";
+import type { Config } from "../setup/config.ts";
 import type { Activity } from "../detect/types.ts";
-import type { Ledger } from "./ledger.ts";
+import type { TradeBook } from "../execute/trades.ts";
 import type { RuleIndex } from "./index.ts";
-import { matchCallout, matchCaScanner, matchEngagement, matchFollow, matchFomo, matchNewTweet, matchPfp, type Exit, type Match, type Result, type Skip } from "./modes.ts";
+import { MODES, type Exit, type Fire, type Skip } from "./modes.ts";
 
 type EvalContext = {
   now: number;
@@ -18,75 +18,62 @@ const MAX_FIRED_KEYS = 100_000;
 
 export class RuleEngine {
   private readonly fired = new Set<string>();
-  private readonly lastFire = new Map<string, number>(); // rule name -> time of last trigger
-
+  private readonly lastFire = new Map<string, number>(); // rule name -> time of last fire
   private readonly index: RuleIndex;
-  private readonly ledger: Ledger;
+  private readonly book: TradeBook;
   private readonly config: Pick<Config, "maxSignalAgeMs">;
 
-  constructor(index: RuleIndex, ledger: Ledger, config: Pick<Config, "maxSignalAgeMs">) {
+  constructor(index: RuleIndex, book: TradeBook, config: Pick<Config, "maxSignalAgeMs">) {
     this.index = index;
-    this.ledger = ledger;
+    this.book = book;
     this.config = config;
   }
 
-  evaluate(activity: Activity, ctx: EvalContext): { triggers: Match[]; skips: Skip[]; exits: Exit[] } {
-    const triggers: Match[] = [];
+  evaluate(activity: Activity, ctx: EvalContext): { fires: Fire[]; skips: Skip[]; exits: Exit[] } {
+    const fires: Fire[] = [];
     const skips: Skip[] = [];
     const exits: Exit[] = [];
-    const rules = this.index.candidates(activity);
-    if (!rules.length) return { triggers, skips, exits };
-    if (ctx.ageMs !== null && ctx.ageMs > this.config.maxSignalAgeMs) {
-      const detail = `post is ${ctx.ageMs} ms old, maxSignalAgeMs is ${this.config.maxSignalAgeMs}`;
-      for (const rule of rules) skips.push({ kind: "skip", rule, code: "stale_post", detail });
-      return { triggers, skips, exits };
-    }
-    for (const rule of rules) {
-      for (const result of this.match(rule, activity, ctx)) {
-        if (result.kind === "skip") skips.push(result);
-        else if (result.kind === "exit") exits.push(result);
-        else this.admit(result, ctx.now, triggers, skips);
+    const stale = ctx.ageMs !== null && ctx.ageMs > this.config.maxSignalAgeMs;
+    for (const rule of this.index.candidates(activity)) {
+      const results = MODES[rule.mode].match(rule, activity, ctx.knownBio);
+      exits.push(...results.filter((r): r is Exit => r.kind === "exit"));
+      const decisions = results.filter((r) => r.kind !== "exit");
+      // A late post is reported only to rules it concerns, once per rule.
+      if (stale && decisions.length) {
+        skips.push({ kind: "skip", rule, code: "stale_post", detail: `post is ${ctx.ageMs} ms old, maxSignalAgeMs is ${this.config.maxSignalAgeMs}` });
+        continue;
+      }
+      for (const r of decisions) {
+        if (r.kind === "skip") skips.push(r);
+        else if (r.kind === "fire") this.admit({ ...r, actor: activity.actor }, ctx.now, fires, skips);
       }
     }
-    return { triggers, skips, exits };
+    return { fires, skips, exits };
   }
 
-  private match(rule: Rule, activity: Activity, ctx: EvalContext): Array<Match | Skip | Exit> {
-    const one = (r: Result) => (r ? [r] : []);
-    switch (rule.mode) {
-      case "ca_scanner":
-        return matchCaScanner(rule, activity, ctx.knownBio);
-      case "engagement":
-        return activity.type === "post" ? one(matchEngagement(rule, activity)) : [];
-      case "new_tweet":
-        return activity.type === "post" || activity.type === "profile" ? one(matchNewTweet(rule, activity)) : [];
-      case "follow":
-        return activity.type === "follow" ? one(matchFollow(rule, activity)) : [];
-      case "pfp_update":
-        return activity.type === "profile" ? one(matchPfp(rule, activity)) : [];
-      case "callout":
-        return activity.type === "callout" ? matchCallout(rule, activity) : [];
-      case "fomo":
-        return activity.type === "fomo" ? matchFomo(rule, activity) : [];
-    }
+  // Undo a fire that sent nothing (filters rejected it, a sell found no position): the rule may
+  // fire again on the same key and gets its snipe back. Called at most once per fire.
+  release(fire: Fire): void {
+    this.fired.delete(fire.fireKey);
+    this.book.releaseSnipe(fire.rule.name);
   }
 
-  private admit(match: Match, now: number, triggers: Match[], skips: Skip[]): void {
-    const { rule } = match;
-    if (this.fired.has(match.fireKey)) return; // the same post or event again: already handled
+  private admit(fire: Fire, now: number, fires: Fire[], skips: Skip[]): void {
+    const { rule } = fire;
+    if (this.fired.has(fire.fireKey)) return; // the same post or event again: already handled
     const last = this.lastFire.get(rule.name);
     const cooldownMs = rule.filters.cooldownSec * 1000;
     if (last !== undefined && now - last < cooldownMs) {
       skips.push({ kind: "skip", rule, code: "cooldown", detail: `${Math.ceil((cooldownMs - (now - last)) / 1000)} s left` });
       return;
     }
-    if (!this.ledger.tryReserveSnipe(rule.name, rule.filters.maxSnipes)) {
+    if (!this.book.reserveSnipe(rule.name, rule.filters.maxSnipes)) {
       skips.push({ kind: "skip", rule, code: "max_snipes", detail: `maxSnipes ${rule.filters.maxSnipes} reached` });
       return;
     }
-    this.fired.add(match.fireKey);
+    this.fired.add(fire.fireKey);
     if (this.fired.size > MAX_FIRED_KEYS) this.fired.delete(this.fired.values().next().value!);
     this.lastFire.set(rule.name, now);
-    triggers.push(match);
+    fires.push(fire);
   }
 }

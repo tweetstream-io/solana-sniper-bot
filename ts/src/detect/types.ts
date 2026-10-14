@@ -20,9 +20,14 @@ export type SignalSource =
   | "callout" // the token of an account/callout event
   | "fomo"; // the coin of an account/thesis or account/token_verified event
 
-// Who acted. X accounts have an id and a handle, pump.fun callers a username, FOMO authors an id and
-// a username. Token verifications have no actor.
-export type Actor = { namespace: "x" | "pump_fun" | "fomo" | "none"; id?: string; handle?: string };
+// Who acted. Post authors are qualified by platform: X accounts are "x", and Truth Social or Binance
+// Square authors keep their platform name, so an X rule never matches them by a shared id.
+// pump.fun callers have a username, FOMO authors an id and a username, verifications no actor.
+export type Actor = {
+  namespace: "x" | "truth_social" | "binance_square" | "pump_fun" | "fomo" | "none";
+  id?: string;
+  handle?: string;
+};
 
 export type Signal = {
   source: SignalSource;

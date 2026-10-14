@@ -4,21 +4,24 @@
 
 import { Keypair } from "@solana/web3.js";
 import { parseConfig } from "../src/setup/config.ts";
-import { Ledger } from "../src/rules/ledger.ts";
+import { TradeBook } from "../src/execute/trades.ts";
 import { Decider } from "../src/pipeline.ts";
-import { ChainCache, Trader } from "../src/execute/trade.ts";
+import { Trader } from "../src/execute/trade.ts";
+import { ChainCache } from "../src/execute/cache.ts";
 import { LatencyReport } from "../src/report/latency.ts";
-import { ScenarioNetwork, type Chain } from "./scenario-network.ts";
+import { ScenarioNetwork, type ScenarioChain } from "./scenario-network.ts";
 
 const N = Number(process.argv[2] ?? 2000);
 const AUTHOR = { id: "1000000000000000001", handle: "@bench_dev" };
 const mints = Array.from({ length: N }, () => Keypair.generate().publicKey.toBase58());
 const curve = { virtualTokenReserves: "1000000000000000", virtualQuoteReserves: "32000000000", realTokenReserves: "720000000000000", realQuoteReserves: "2000000000", tokenTotalSupply: "1000000000000000", complete: false };
-const chain: Chain = {
+const chain: ScenarioChain = {
   solUsd: 150,
   priorityFeeMicroLamports: 40_000,
   tipFloorSol: 0.00002,
   blockHeight: 300_000_000,
+  epoch: 850,
+  feeTiers: [{ marketCapLamportsThreshold: "0", protocolFeeBps: 95, creatorFeeBps: 30 }],
   mints: Object.fromEntries(mints.map((m) => [m, { tokenProgram: "token-2022", mintAuthority: false, freezeAuthority: false, supply: "1000000000000000", decimals: 6, curve }])),
 };
 const config = parseConfig({
@@ -32,13 +35,14 @@ class NearbyRpc extends ScenarioNetwork {
   }
 }
 const network = new NearbyRpc(chain);
-const ledger = Ledger.open(null);
+const book = TradeBook.open(null, "dry_run");
 const cache = new ChainCache(network);
 cache.start(60_000);
-await new Promise((r) => setTimeout(r, 50)); // let the caches fill once
+await cache.ready();
+await new Promise((r) => setTimeout(r, 50)); // the slower caches (fee tiers) fill too
 const report = new LatencyReport();
-const trader = new Trader({ config, network, ledger, cache, report, wallet: Keypair.generate(), dryRun: true, lander: null, jitoEnabled: true, jupiterHeaders: {} });
-const decider = new Decider(config, ledger);
+const decider = new Decider(config, book);
+const trader = new Trader({ config, network, book, cache, report, wallet: Keypair.generate(), dryRun: true, lander: null, senders: [], releaseFire: (f) => decider.release(f) });
 
 const quiet = console.log;
 console.log = () => {};
@@ -50,7 +54,7 @@ for (const [i, mint] of mints.entries()) {
   const outcome = decider.handle(JSON.parse(frame), { wallMs: Date.now() });
   const decidedNs = process.hrtime.bigint();
   decideUs.push(Number(decidedNs - receivedNs) / 1000);
-  for (const m of outcome.triggers) await trader.buy(m, { mint, rule: "bench", connection: "bench", publishedAtWall: null, receivedWall: Date.now(), receivedNs, decidedNs });
+  for (const fire of outcome.fires) await trader.buy(fire, { mint, rule: "bench", connection: "bench", eventRef: outcome.eventRef, publishedAtWall: null, receivedWall: Date.now(), receivedNs, decidedNs });
 }
 console.log = quiet;
 cache.stop();

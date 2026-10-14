@@ -1,5 +1,5 @@
 // TweetStream v1 message types (only the fields this bot reads), post keys, event references,
-// and publish times from X post ids. Full contract: https://tweetstream.io/docs/asyncapi.json
+// and publish times from X post ids. Full contract: tweetstream.io/docs/asyncapi.json
 
 // Every server message is a v1 envelope. Route on t (channel) and op (operation); d is the payload.
 export type Envelope = { v: 1; t: string; op: string; id?: string; ts: number; d: unknown };
@@ -17,8 +17,8 @@ export type Author = {
 };
 
 // account/* actors and follow targets also carry the profile website.
-export type Actor = Author & { websiteUrl?: string };
-export type FollowTarget = Actor & { handle: string };
+export type AccountRef = Author & { websiteUrl?: string };
+export type FollowTarget = AccountRef & { handle: string };
 
 export type TweetUrl = { url: string; tco?: string; name?: string };
 
@@ -93,7 +93,7 @@ export type TweetPin = {
 };
 
 export type AccountFollow = {
-  actor: Actor;
+  actor: AccountRef;
   target: FollowTarget;
   eventId: string;
   kind: "FOLLOW";
@@ -111,7 +111,7 @@ export type ProfileFields = {
 };
 
 export type AccountProfileUpdate = {
-  actor: Actor;
+  actor: AccountRef;
   changes: ProfileFields;
   previous?: ProfileFields;
   eventId: string;
@@ -158,13 +158,66 @@ export function normalizeHandle(handle: string | undefined): string | undefined 
   return handle?.trim().replace(/^@/, "") || undefined;
 }
 
-// The stable name of an event, used in logs, the latency report, and shared/fixtures:
+// The stable name of an event, used in logs, dedupe, the latency report, and shared/fixtures:
 // "tweet/content twitter:123", "account/follow <eventId>", "account/callout <envelope id>".
+// Without an envelope id, account events fall back to an id from the payload; "" means none.
 export function eventRef(event: Envelope): string {
-  const d = (event.d ?? {}) as { tweetId?: string; platform?: Platform; author?: Author; eventId?: string };
+  const d = (event.d ?? {}) as {
+    tweetId?: string;
+    platform?: Platform;
+    author?: Author;
+    eventId?: string;
+    calloutId?: string;
+    replyId?: string;
+    kind?: string;
+    thesis?: { id?: string };
+    coin?: { address?: string };
+  };
   const pair = `${event.t}/${event.op}`;
   if (event.t === "tweet" && typeof d.tweetId === "string") return `${pair} ${postKey({ ...d, tweetId: d.tweetId })}`;
-  return `${pair} ${d.eventId ?? event.id ?? ""}`;
+  const fromPayload =
+    pair === "account/callout" || pair === "account/callout_update"
+      ? d.calloutId && `${d.calloutId}:${d.kind ?? "callout"}:${d.replyId ?? ""}`
+      : pair === "account/thesis"
+        ? d.thesis?.id
+        : pair === "account/token_verified"
+          ? d.coin?.address
+          : undefined;
+  return `${pair} ${d.eventId ?? event.id ?? fromPayload ?? ""}`;
+}
+
+// Checks the fields asyncapi.json marks required for each pair this bot reads, so a malformed
+// frame is skipped with a reason instead of throwing deep inside a detector. null means valid.
+export function payloadProblem(pair: string, d: unknown): string | null {
+  const o = d as Record<string, any> | null;
+  const str = (v: unknown) => typeof v === "string" && v.length > 0;
+  const obj = (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v);
+  if (!obj(o)) return "payload is not an object";
+  const need = (ok: boolean, what: string) => (ok ? null : `missing or invalid ${what}`);
+  switch (pair) {
+    case "tweet/content":
+      return need(str(o!.tweetId), "tweetId") ?? need(typeof o!.text === "string", "text") ?? need(obj(o!.author), "author") ?? need(["post", "quote", "reply", "retweet"].includes(o!.kind), "kind");
+    case "tweet/update":
+    case "tweet/meta":
+    case "tweet/delete":
+      return need(str(o!.tweetId), "tweetId");
+    case "tweet/pin":
+      return need(str(o!.tweetId), "tweetId") ?? need(obj(o!.author), "author") ?? need(str(o!.eventId), "eventId");
+    case "account/follow":
+    case "account/unfollow":
+      return need(obj(o!.actor), "actor") ?? need(obj(o!.target) && str(o!.target.handle), "target.handle") ?? need(str(o!.eventId), "eventId");
+    case "account/profile_update":
+      return need(obj(o!.actor), "actor") ?? need(obj(o!.changes), "changes") ?? need(str(o!.eventId), "eventId");
+    case "account/callout":
+    case "account/callout_update":
+      return need(str(o!.caller?.username), "caller.username") ?? need(str(o!.token?.address), "token.address") ?? need(str(o!.calloutId), "calloutId");
+    case "account/thesis":
+      return need(str(o!.coin?.address), "coin.address") ?? need(str(o!.author?.id) && str(o!.author?.username), "author") ?? need(str(o!.thesis?.id) && typeof o!.thesis?.text === "string", "thesis");
+    case "account/token_verified":
+      return need(str(o!.coin?.address), "coin.address");
+    default:
+      return null;
+  }
 }
 
 const TWITTER_EPOCH_MS = 1288834974657n;

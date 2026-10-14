@@ -11,7 +11,8 @@ import { backoffMs } from "../feed/client.ts";
 
 // Jito's /api/v1/transactions takes only the encoding option and always skips preflight.
 // RPCs get skipPreflight (saves a simulation) and maxRetries 0, because we rebroadcast ourselves.
-export type SenderTarget = { name: string; url: string; kind: "rpc" | "jito" };
+// needsTip: a sender that only accepts transactions paying it a tip (configured tipAccounts).
+export type SenderTarget = { name: string; url: string; kind: "rpc" | "jito"; needsTip?: boolean };
 
 export type Landing = {
   signature: string;
@@ -23,27 +24,26 @@ export type Landing = {
   confirmedNs?: bigint;
 };
 
-type LanderOptions = { rebroadcastMs: number; confirmTimeoutMs: number; currentBlockHeight: () => number | null };
+type LanderOptions = { rebroadcastMs: number; confirmTimeoutMs: number; currentBlockHeight: () => number | null; statusRpcUrl: string | null };
 
 export class Lander {
-  private readonly senders: SenderTarget[];
   private readonly watcher: SignatureWatcher;
   private readonly opts: LanderOptions;
 
-  constructor(senders: SenderTarget[], watcher: SignatureWatcher, opts: LanderOptions) {
-    this.senders = senders;
+  constructor(watcher: SignatureWatcher, opts: LanderOptions) {
     this.watcher = watcher;
     this.opts = opts;
   }
 
-  async land(tx: VersionedTransaction, lastValidBlockHeight: number): Promise<Landing> {
+  // Sends to `targets`, which execute/trade.ts picks per transaction (antiMev, tips).
+  async land(tx: VersionedTransaction, lastValidBlockHeight: number, targets: SenderTarget[]): Promise<Landing> {
     const signature = bs58.encode(tx.signatures[0]!);
     const base64 = Buffer.from(tx.serialize()).toString("base64");
     // Subscribe before sending, so a fast confirmation cannot arrive before we listen.
     const outcome = this.watcher.wait(signature, this.opts.confirmTimeoutMs);
     const sentNs = process.hrtime.bigint();
     const result: Landing = { signature, status: "unknown", sentNs };
-    const first = this.fanOut(base64).then((by) => {
+    const first = this.fanOut(base64, targets).then((by) => {
       result.firstAckNs = process.hrtime.bigint();
       result.firstAckBy = by;
     });
@@ -52,7 +52,7 @@ export class Lander {
     const rebroadcast = setInterval(() => {
       const height = this.opts.currentBlockHeight();
       if (height !== null && height > lastValidBlockHeight) return clearInterval(rebroadcast);
-      this.fanOut(base64).catch(() => {});
+      this.fanOut(base64, targets).catch(() => {});
     }, this.opts.rebroadcastMs);
     try {
       const final = await outcome;
@@ -64,22 +64,27 @@ export class Lander {
     return result;
   }
 
+  // The reconciler sends a stored transaction again while its blockhash is valid.
+  async rebroadcast(base64: string, targets: SenderTarget[]): Promise<void> {
+    if (targets.length) await this.fanOut(base64, targets).catch(() => {});
+  }
+
   // If the subscription never answered (the RPC WebSocket was down), ask once over HTTP.
   private async pollOnce(signature: string, fallback: Outcome): Promise<Outcome> {
-    const rpc = this.senders.find((s) => s.kind === "rpc");
+    const rpc = this.opts.statusRpcUrl;
     if (!rpc) return fallback;
     type Status = { value: Array<{ confirmationStatus?: string; err: unknown } | null> };
-    const status = await rpcCall<Status>(rpc.url, "getSignatureStatuses", [[signature]]).catch(() => null);
+    const status = await rpcCall<Status>(rpc, "getSignatureStatuses", [[signature]]).catch(() => null);
     const value = status?.value[0];
     if (!value?.confirmationStatus || value.confirmationStatus === "processed") return fallback;
     return value.err ? { status: "failed", error: JSON.stringify(value.err) } : { status: "confirmed" };
   }
 
   // Resolves with the name of the first sender that accepted the transaction.
-  private fanOut(base64: string): Promise<string> {
+  private fanOut(base64: string, targets: SenderTarget[]): Promise<string> {
     const errors: string[] = [];
     return Promise.any(
-      this.senders.map(async (s) => {
+      targets.map(async (s) => {
         const options = s.kind === "jito" ? { encoding: "base64" } : { encoding: "base64", skipPreflight: true, maxRetries: 0 };
         try {
           await rpcCall<string>(s.url, "sendTransaction", [base64, options], AbortSignal.timeout(5_000));
