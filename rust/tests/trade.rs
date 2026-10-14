@@ -499,6 +499,9 @@ async fn jupiter_setup(execute: Execute, hang: bool, market_maker_signs_first: b
     setup(network, scenario, Options { initial, ..options() }).await
 }
 
+/// A real-format signature (64 bytes of 7, in base58) for Jupiter to return.
+const LANDED_SIG: &str = "99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8";
+
 fn jupiter_answer(status: &str, code: i64, signature: Option<&str>) -> Execute {
     let (status, signature) = (status.to_string(), signature.map(str::to_string));
     Box::new(move || Ok(JupiterExecute { status: status.clone(), code, signature: signature.clone(), error: None }))
@@ -534,8 +537,8 @@ async fn jupiter_sell_answers_map_through_the_shared_codes_and_a_success_must_sa
         (Box::new(|| Err(NetError("timed out".to_string()))), true, 1, "a timeout stays pending"),
         (jupiter_answer("Failed", -1001, None), true, 1, "an unknown code stays pending"),
         (jupiter_answer("Failed", -1002, None), true, 0, "a rejection ends the sell, the position stays"),
-        (jupiter_answer("Failed", 0, Some("5sig")), true, 1, "code 0 without Success stays pending"),
-        (jupiter_answer("Success", 0, Some("5sig")), false, 0, "a success sells the position"),
+        (jupiter_answer("Failed", 0, Some(LANDED_SIG)), true, 1, "code 0 without Success stays pending"),
+        (jupiter_answer("Success", 0, Some(LANDED_SIG)), false, 0, "a success sells the position"),
     ];
     for (execute, held, pending, what) in cases {
         let t = jupiter_setup(execute, false, false, graduated()).await;
@@ -548,10 +551,24 @@ async fn jupiter_sell_answers_map_through_the_shared_codes_and_a_success_must_sa
 
 #[tokio::test(flavor = "multi_thread")]
 async fn jupiter_stores_the_signature_it_returns_and_a_sell_without_one_of_ours_waits_for_review() {
-    let t = jupiter_setup(jupiter_answer("Failed", -1001, Some("5returned")), false, false, graduated()).await;
+    let t = jupiter_setup(jupiter_answer("Failed", -1001, Some(LANDED_SIG)), false, false, graduated()).await;
     t.trader.sell(PLAIN_MINT, "test").await;
     let pending = state(&t)["pending"].as_object().unwrap().values().next().cloned().unwrap();
-    assert_eq!(pending["signature"], "5returned");
+    assert_eq!(pending["signature"], LANDED_SIG);
+
+    let zero = "1".repeat(64);
+    for (answer, what) in [
+        (jupiter_answer("Success", 0, Some("")), "an empty signature"),
+        (jupiter_answer("Success", 0, Some("not-a-signature")), "a signature that is not base58 of 64 bytes"),
+        (jupiter_answer("Success", 0, Some(&zero)), "64 zero bytes"),
+        (jupiter_answer("Failed", -1001, Some("not-a-signature")), "an unusable signature on an unknown code"),
+    ] {
+        let t = jupiter_setup(answer, false, true, graduated()).await;
+        assert_ne!(t.trader.sell(PLAIN_MINT, "test").await, SellResult::Sold, "{what}");
+        let pending = state(&t)["pending"].as_object().unwrap().values().next().cloned().unwrap();
+        assert_eq!(pending["signature"], Value::Null, "{what} is not stored");
+        assert!(state(&t)["positions"].get(PLAIN_MINT).is_some(), "{what} keeps the position");
+    }
 
     let t = jupiter_setup(jupiter_answer("Failed", -1001, None), false, true, graduated()).await;
     t.trader.sell(PLAIN_MINT, "test").await;

@@ -503,21 +503,24 @@ impl<N: Network> Trader<N> {
         };
         let answered = Instant::now();
         (trace.first_ack, trace.confirmed, trace.first_ack_by) = (Some(answered), Some(answered), Some("jupiter".to_string()));
-        if let Some(signature) = &result.signature {
-            self.d.book.set_signature(&ticket.id, signature);
-        }
+        let signature = result.signature.filter(|s| is_usable_signature(s));
         let error = format!("Jupiter code {}{}", result.code, result.error.as_ref().map(|e| format!(": {e}")).unwrap_or_default());
-        match jupiter_code(result.code) {
+        let outcome = match jupiter_code(result.code) {
             // A success must say so and name a signature to check on chain; anything less waits.
-            JupiterCode::Landed => match result.signature.or_else(|| built.signed.signature()) {
+            JupiterCode::Landed => match signature.clone().or_else(|| built.signed.signature()) {
                 Some(signature) if result.status == "Success" => {
-                    TradeOutcome::Landed { token_amount: None, spent_lamports: self.debit(&signature).await }
+                    return TradeOutcome::Landed { token_amount: None, spent_lamports: self.debit(&signature).await };
                 }
                 Some(_) | None => TradeOutcome::Unknown { error: format!("{error}, status {}, no usable signature", result.status) },
             },
-            JupiterCode::Rejected => TradeOutcome::NotLanded { error },
+            JupiterCode::Rejected => return TradeOutcome::NotLanded { error },
             JupiterCode::Unknown => TradeOutcome::Unknown { error },
+        };
+        // Only a trade that stays pending keeps the signature here; `resolve` writes a finished one once.
+        if let Some(signature) = &signature {
+            self.d.book.set_signature(&ticket.id, signature);
         }
+        outcome
     }
 
     async fn debit(&self, signature: &str) -> Option<u64> {
@@ -720,15 +723,22 @@ fn manual_review(pending: &Pending) -> String {
     format!(
         "trade {} ({} of {}) has no signature to follow and waits for you. Stop the bot and look up the wallet's \
          transactions for this mint. If the sell landed, delete positions[\"{}\"] and pending[\"{}\"] in the same edit. If it \
-         did not, delete pending[\"{}\"] and subtract its reservedLamports ({}) from spend.totalLamports. Then start the bot again.",
+         did not, delete pending[\"{}\"], subtract its reservedLamports ({}) from spend.totalLamports, and delete the spend.recent \
+         entry with tradeId \"{}\", all in the same edit. Then start the bot again.",
         pending.id,
         wire_name(&pending.side),
         pending.mint,
         pending.mint,
         pending.id,
         pending.id,
-        pending.reserved_lamports
+        pending.reserved_lamports,
+        pending.id
     )
+}
+
+/// A base58 64-byte signature that is not all zeros: the only form the chain can look up.
+fn is_usable_signature(signature: &str) -> bool {
+    signature.parse::<Signature>().is_ok_and(|s| s != Signature::default())
 }
 
 /// What a dry run records for a buy it does not send.

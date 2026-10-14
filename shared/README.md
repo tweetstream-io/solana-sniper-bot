@@ -174,7 +174,7 @@ Reconciler, at startup and every 2 seconds (a run that starts while another runs
 2. When the signature is not found, ask `isBlockhashValid` for the trade's `blockhash` (at `processed`). Anything but `false`, including a failed call, keeps the trade pending.
 3. Only after `false`, ask `getSignatureStatuses` once more. The trade expires only when this second lookup also finds nothing; a confirmed signature resolves it instead. The order matters: a transaction can confirm between the first lookup and the blockhash check.
 
-A pending trade with `signature: null` (only a Jupiter sell can have one) waits for manual review, and the bot logs it once with these steps. Stop the bot. Look up the wallet's transactions for that mint. If the sell landed, delete `positions[<mint>]` and the pending entry in the same edit. If it did not land, delete the pending entry and subtract its `reservedLamports` from `spend.totalLamports`. Start the bot again. `fixtures/ledger/jupiter-review.json` is a complete example; the two entries look like this:
+A pending trade with `signature: null` (only a Jupiter sell can have one) waits for manual review, and the bot logs it once with these steps. Stop the bot. Look up the wallet's transactions for that mint. If the sell landed, delete `positions[<mint>]` and the pending entry in the same edit. If it did not land, delete the pending entry, subtract its `reservedLamports` from `spend.totalLamports`, and delete its entry in `spend.recent` (the one whose `tradeId` is the trade id), all in the same edit. Start the bot again. `fixtures/ledger/jupiter-review.json` is a complete example; the two entries look like this:
 
 ```json
 "positions": {

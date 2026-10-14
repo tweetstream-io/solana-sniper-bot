@@ -247,7 +247,7 @@ export class Trader {
 
   // Jupiter lands a sell itself; its code maps through shared/trading.json. A sell counts as landed
   // only with status "Success", a landed code, and a signature to check it by. Anything else, a
-  // timeout, or an unreadable answer leaves it pending, with any returned signature kept.
+  // timeout, or an unreadable answer leaves it pending, with any usable returned signature kept.
   private async jupiterExecute(built: Built, ownSig: string | null, trace: Trace): Promise<Outcome> {
     trace.sentNs = process.hrtime.bigint();
     let result;
@@ -259,7 +259,7 @@ export class Trader {
     trace.firstAckNs = trace.confirmedNs = process.hrtime.bigint();
     trace.firstAckBy = "jupiter";
     const detail = `Jupiter ${result.status} code ${result.code}${result.error ? `: ${result.error}` : ""}`;
-    const signature = result.signature || ownSig || undefined;
+    const signature = (isUsableSignature(result.signature) ? result.signature : ownSig) ?? undefined;
     const kind = jupiterOutcome(result.code);
     if (kind === "landed" && result.status === "Success" && signature) return { kind: "landed", spentLamports: null, tokenAmount: null };
     if (kind === "rejected") return { kind: "rejected", error: detail };
@@ -399,13 +399,24 @@ function ownSignature(tx: VersionedTransaction): string | null {
   return first && first.some((b) => b !== 0) ? bs58.encode(first) : null;
 }
 
+// A base58 64-byte signature that is not all zeros: the only form the chain can look up.
+function isUsableSignature(signature: string | undefined): signature is string {
+  if (!signature) return false;
+  try {
+    const bytes = bs58.decode(signature);
+    return bytes.length === 64 && bytes.some((b) => b !== 0);
+  } catch {
+    return false;
+  }
+}
+
 // A trade only a person can settle: the steps are in shared/README.md, section Trade state.
 function manualReviewMessage(id: string, p: Pending): string {
   return [
     `${p.side} ${short(p.mint)} (trade ${id}) has no signature to check, so it needs you.`,
     `Stop the bot and look up the wallet's transactions for ${p.mint}.`,
     `If the ${p.side} landed, ${p.side === "sell" ? `delete positions["${p.mint}"]` : `add purchases["${p.mint}"] and positions["${p.mint}"]`} and pending["${id}"] in the same edit.`,
-    `If it did not land, delete pending["${id}"] and subtract ${p.reservedLamports} from spend.totalLamports.`,
+    `If it did not land, delete pending["${id}"], subtract ${p.reservedLamports} from spend.totalLamports, and delete the spend.recent entry with tradeId "${id}", all in the same edit.`,
     "Then start the bot again.",
   ].join(" ");
 }

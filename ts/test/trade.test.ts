@@ -282,11 +282,14 @@ test("a refused buy sends nothing: safety check, coin off the curve, or a reserv
   }
 });
 
+// A real-format signature (64 bytes of 7, in base58) for Jupiter to return.
+const LANDED_SIG = "99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8";
+
 // Jupiter answers from the test: an order for the wallet, and a chosen /execute result.
 // otherPayer leaves the first signature slot to another signer, as a market maker's quote can.
 class JupiterScenario extends ScenarioNetwork {
   otherPayer = false;
-  execute: () => Promise<JupiterExecute> = async () => ({ status: "Success", code: 0, signature: "landed-sig" });
+  execute: () => Promise<JupiterExecute> = async () => ({ status: "Success", code: 0, signature: LANDED_SIG });
   override async jupiterOrder(q: { taker: string }): Promise<JupiterOrder> {
     const taker = new PublicKey(q.taker);
     const payer = this.otherPayer ? Keypair.generate().publicKey : taker;
@@ -311,12 +314,14 @@ function holdGraduated(book: TradeBook, spend: Parameters<TradeBook["recordDryRu
 test("a Jupiter sell lands only on Success with a code that means landed and a signature to check", async () => {
   const timeout = () => Promise.reject(Object.assign(new Error("timed out"), { name: "TimeoutError" }));
   for (const [result, otherPayer, expected] of [
-    [async () => ({ status: "Success", code: 0, signature: "landed-sig" }), false, "sold"],
+    [async () => ({ status: "Success", code: 0, signature: LANDED_SIG }), false, "sold"],
     [async () => ({ status: "Success", code: 0 }), false, "sold"], // our own signature is enough
     [async () => ({ status: "Failed", code: 0 }), false, "pending"],
     [async () => ({ status: "Success", code: -1001 }), false, "pending"],
     [timeout, false, "pending"],
     [async () => ({ status: "Success", code: 0 }), true, "review"], // no signature at all
+    [async () => ({ status: "Success", code: 0, signature: "not-a-signature" }), true, "review"], // not base58 of 64 bytes
+    [async () => ({ status: "Success", code: 0, signature: "1".repeat(64) }), true, "review"], // 64 zero bytes
     [async () => ({ status: "Failed", code: -1002 }), false, "rejected"],
   ] as Array<[() => Promise<JupiterExecute>, boolean, string]>) {
     const network = new JupiterScenario(chain());
