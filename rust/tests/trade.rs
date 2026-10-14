@@ -171,8 +171,10 @@ fn decode(base64: &str) -> VersionedTransaction {
     wincode::deserialize(&base64::engine::general_purpose::STANDARD.decode(base64).unwrap()).unwrap()
 }
 
-/// An RPC stand-in that records each new transaction and its pending entry on disk at the moment
-/// it arrived; `on_send` lets a test play the chain (debits, balances).
+/// An RPC stand-in that records every transaction it receives and its pending entry on disk at the
+/// moment it arrived; `on_send` lets a test play the chain (debits, balances). Every send counts,
+/// even a byte-identical one: a retry with an unchanged blockhash and the same randomly picked fee
+/// recipient signs to the same signature.
 async fn rpc_stand_in(state_path: PathBuf, network: Arc<ScenarioNetwork>, on_send: OnSend) -> (String, SeenList) {
     let seen = SeenList::default();
     let list = Arc::clone(&seen);
@@ -181,11 +183,7 @@ async fn rpc_stand_in(state_path: PathBuf, network: Arc<ScenarioNetwork>, on_sen
         let signature = transaction.signatures[0].to_string();
         let state: Value = serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
         let pending = state["pending"].as_object().unwrap().values().find(|p| p["signature"] == signature.as_str()).cloned();
-        let mut list = list.lock().unwrap();
-        if !list.iter().any(|s| s.transaction.signatures[0].to_string() == signature) {
-            list.push(Seen { transaction, pending_at_send: pending });
-        }
-        drop(list);
+        list.lock().unwrap().push(Seen { transaction, pending_at_send: pending });
         on_send(&network, &signature);
     });
     (common::rpc_server(200, on_request).await, seen)
