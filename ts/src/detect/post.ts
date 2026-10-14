@@ -8,7 +8,7 @@ import type { Post } from "./store.ts";
 import { addressesFromUrl, findAll, isSolanaAddress, type FoundAddress } from "./addresses.ts";
 import type { Actor, Confidence, PostActivity, Signal, SignalSource } from "./types.ts";
 
-const MAX_REF_DEPTH = 4;
+const MAX_REF_DEPTH = 7; // the depth the server sends (MaxTweetReferenceDepth)
 
 // An account's effective platform is its own, else the platform of the event or outer account it
 // appears in. Only "twitter" accounts get namespace "x", the only namespace rule specs match.

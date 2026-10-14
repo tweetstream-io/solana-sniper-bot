@@ -189,7 +189,9 @@ export function eventRef(event: Envelope): string {
 // Checks the fields asyncapi.json marks required for each pair this bot reads, so a malformed
 // frame is skipped with a reason instead of throwing deep inside a detector. null means valid.
 const POST_KINDS: unknown[] = ["post", "quote", "reply", "retweet"];
-const profileValues = (fields: object) => Object.values(fields).every((v) => v === null || typeof v === "string");
+// verifiedLabel is an object ({badge, description, url}) or null; every other field is text or null.
+const profileValues = (fields: object) =>
+  Object.entries(fields).every(([k, v]) => v === null || (k === "verifiedLabel" ? typeof v === "object" && !Array.isArray(v) : typeof v === "string"));
 
 export function payloadProblem(pair: string, d: unknown): string | null {
   const o = d as Record<string, any> | null;
@@ -215,8 +217,8 @@ export function payloadProblem(pair: string, d: unknown): string | null {
         need(obj(o!.actor), "actor") ??
         need(obj(o!.changes), "changes") ??
         need(str(o!.eventId), "eventId") ??
-        need(profileValues(o!.changes), "changes (every value a string or null)") ??
-        need(o!.previous === undefined || (obj(o!.previous) && profileValues(o!.previous)), "previous (every value a string or null)")
+        need(profileValues(o!.changes), "changes (text fields a string or null, verifiedLabel an object or null)") ??
+        need(o!.previous === undefined || (obj(o!.previous) && profileValues(o!.previous)), "previous (text fields a string or null, verifiedLabel an object or null)")
       );
     case "account/callout":
     case "account/callout_update":

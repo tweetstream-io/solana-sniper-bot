@@ -12,7 +12,7 @@ type Rules = {
   standalone: { wordChars: string };
   linkInText: { pattern: string; flags: string; stripTrailing: string };
   links: Array<{ via: string; host: string; path: string; confidence: Confidence }>;
-  denylist: Array<{ address: string }>;
+  denylist: Array<{ address: string; name: string }>;
 };
 const RULES = JSON.parse(readFileSync(new URL("../../../shared/addresses.json", import.meta.url), "utf8")) as Rules;
 
@@ -48,6 +48,9 @@ export function classifyAddress(candidate: string): { chain: Chain; address: str
 }
 
 export const isSolanaAddress = (candidate: string) => classifyAddress(candidate)?.chain === "solana";
+
+// The denylist entry's name ("wrapped SOL mint", "USDC"), or null when the address is not on it.
+export const denylistName = (candidate: string): string | null => RULES.denylist.find((d) => d.address === candidate)?.name ?? null;
 
 // A candidate glued to more letters or digits is a slice of something longer (a signature, a slug).
 function standalone(text: string, start: number, end: number): boolean {

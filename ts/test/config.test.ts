@@ -58,3 +58,9 @@ test("docs/config.md matches the schema (run npm run docs:config after editing t
   const { renderConfigDocs } = await import("../scripts/config-docs.ts");
   assert.equal(readFileSync(root("docs/config.md"), "utf8"), renderConfigDocs());
 });
+
+test("a denylisted mint is named as such, not called a bad address", () => {
+  const rule = (mint: string) => ({ rules: [{ name: "pfp", mode: "pfp_update", accounts: ["111"], token: { mint } }] });
+  assert.equal(message(rule("So11111111111111111111111111111111111111112")), 'rule "pfp": "So11111111111111111111111111111111111111112" is the wrapped SOL mint, which shared/addresses.json denylists because it is never a token to snipe.');
+  assert.match(message(rule("So1111111111111111111111111111111111111111")), /does not decode to a 32-byte Solana address/);
+});

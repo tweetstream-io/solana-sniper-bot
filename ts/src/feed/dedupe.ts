@@ -1,18 +1,23 @@
 // First copy wins across connections. With an Ultra Speed key and a standard key the same event
-// can arrive twice; the second copy is dropped before detection. Next: pipeline.ts routes the event.
+// arrives twice; the second copy is dropped before detection. Next: pipeline.ts routes the event.
 
-import { eventRef, type Envelope } from "../protocol.ts";
+import { createHash } from "node:crypto";
+import type { Envelope } from "../protocol.ts";
 
-// One post has one content and one delete; pins and account events carry a unique eventId
-// or calloutId. tweet/update and tweet/meta can repeat for a post, so they are keyed by
-// envelope id when present and otherwise pass through; rules fire once per post anyway.
-function dedupeKey(event: Envelope): string | null {
-  const pair = `${event.t}/${event.op}`;
-  if (pair === "tweet/update" || pair === "tweet/meta") return event.id ? `${pair} id:${event.id}` : null;
-  const eventId = (event.d as { eventId?: unknown } | null)?.eventId;
-  if (typeof eventId === "string") return `${pair} ${eventId}`;
-  const ref = eventRef(event);
-  return ref.endsWith(" ") ? null : ref; // no id anywhere: never deduplicated
+// An event repeats when its type, op, and payload repeat. The envelope is no help: the two copies
+// differ in ts, and every tweet/update and tweet/meta of a post carries the same id (the tweetId).
+function dedupeKey(event: Envelope): string {
+  return createHash("sha256").update(`${event.t}/${event.op}\n${canonical(event.d)}`).digest("base64");
+}
+
+// JSON with object keys sorted, so key order on the wire does not matter.
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value).filter(([, v]) => v !== undefined);
+    return `{${entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 export class EventDedupe {
@@ -25,7 +30,6 @@ export class EventDedupe {
 
   first(event: Envelope): boolean {
     const key = dedupeKey(event);
-    if (key === null) return true;
     if (this.seen.has(key)) return false;
     this.seen.add(key);
     if (this.seen.size > this.capacity) this.seen.delete(this.seen.values().next().value!);

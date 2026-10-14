@@ -231,7 +231,22 @@ export async function startBot(o: BotOptions): Promise<RunningBot> {
     for (const e of outcome.exits) log("exit", `${short(e.mint)}: the post it was bought on was deleted`);
   };
 
-  const feeds = o.feeds.map((f) => new FeedClient({ name: f.name, apiKey: f.apiKey, url: o.wsUrl, heartbeatMs: o.heartbeatMs ?? 30_000, onEvent, onFatal: o.onFatal }));
+  // A refused Ultra key costs only its head start: with a standard key the bot keeps running.
+  const feeds: FeedClient[] = o.feeds.map((f) => {
+    const client: FeedClient = new FeedClient({
+      name: f.name,
+      apiKey: f.apiKey,
+      url: o.wsUrl,
+      heartbeatMs: o.heartbeatMs ?? 30_000,
+      onEvent,
+      onFatal: (reason) => {
+        if (f.name !== "ultra" || o.feeds.length === 1) return o.onFatal(reason);
+        client.stop();
+        log("refused", `${reason} Running on the standard connection only.`);
+      },
+    });
+    return client;
+  });
   for (const feed of feeds) feed.start();
   return {
     report,

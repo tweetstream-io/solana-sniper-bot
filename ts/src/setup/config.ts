@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
-import { isSolanaAddress } from "../detect/addresses.ts";
+import { denylistName, isSolanaAddress } from "../detect/addresses.ts";
 import type { Confidence, SignalSource } from "../detect/types.ts";
 
 export type Mode = "ca_scanner" | "engagement" | "new_tweet" | "follow" | "pfp_update" | "callout" | "fomo";
@@ -215,7 +215,10 @@ function checkSemantics(config: Config): Config {
     const where = `rule "${rule.name}"`;
     const mints: Array<[string, string]> = [["token.mint", rule.token.mint], ...rule.fomoCoins.map((m, i): [string, string] => [`fomoCoins.${i}`, m])];
     for (const [field, mint] of mints) {
-      if (mint && !isSolanaAddress(mint)) throw new ConfigError(`${where}: "${mint}" does not decode to a 32-byte Solana address.`, rule.name, field);
+      if (!mint || isSolanaAddress(mint)) continue;
+      const denied = denylistName(mint);
+      const why = denied ? `is the ${denied}, which shared/addresses.json denylists because it is never a token to snipe` : "does not decode to a 32-byte Solana address";
+      throw new ConfigError(`${where}: "${mint}" ${why}.`, rule.name, field);
     }
     const lists = { accounts: rule.accounts, reactedTo: rule.reactedTo, targets: rule.targets, callers: rule.callers, fomoUsers: rule.fomoUsers };
     const specs: Array<[string, string]> = [["reactor", rule.reactor ?? ""], ...Object.entries(lists).flatMap(([k, list]) => list.map((v, i): [string, string] => [`${k}.${i}`, v]))];
