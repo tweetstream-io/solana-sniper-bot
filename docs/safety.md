@@ -47,7 +47,7 @@ Open positions are priced every `exits.pollMs`: from one read of the curve, or f
 
 ## Going live
 
-1. Run in dry run until every signal and skip in the log is one you expected.
+1. Run in dry run, with your own RPC endpoint in `SOLANA_RPC_URLS`, until every signal and skip in the log is one you expected. The public endpoint rate-limits the bot.
 2. Create a new wallet for the bot and fund it with what you can lose. Put its base58 secret key in `WALLET_SECRET_KEY` in `.env`, which git ignores. The key never leaves your machine: the bot signs locally and sends signed transactions to your own RPC and Jito endpoints.
 3. Set the spend caps in `config.json` to amounts you accept losing in full.
 4. Set `DRY_RUN=false`. The bot prints a banner with the wallet and the caps before it connects.

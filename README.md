@@ -68,7 +68,7 @@ The demo times each path once, cold. `npm run bench` measures it warm; see [docs
 ## Run it on live X data
 
 1. [Start a trial](https://tweetstream.io/signup?offer=basic-monthly-trial&utm_source=github&utm_medium=referral&utm_campaign=solana-sniper-bot&utm_content=readme-quickstart). The Minimum and Pro trials last 3 days, with 5 tracked accounts and 1 WebSocket connection. Copy your key from the [dashboard](https://tweetstream.io/dashboard?tab=api&utm_source=github&utm_medium=referral&utm_campaign=solana-sniper-bot&utm_content=readme-quickstart) and add the accounts you want to watch there.
-2. In the repository root, run `cp .env.example .env` and `cp config.example.json config.json`, then paste the key into `TWEETSTREAM_API_KEY`.
+2. In the repository root, run `cp .env.example .env` and `cp config.example.json config.json`. Paste the key into `TWEETSTREAM_API_KEY`, and put your own Solana RPC endpoint in `SOLANA_RPC_URLS`. The public endpoint in the example is for the demo only: it rate-limits the bot's blockhash refresh within minutes.
 3. In `config.json`, replace `YOUR_ACCOUNT` with the account to watch. A numeric account id is safer than a handle, which can be renamed or taken over.
 4. Run `npm start` in `ts/`. It logs every signal and every buy it would make.
 
