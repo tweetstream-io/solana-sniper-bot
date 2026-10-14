@@ -144,7 +144,7 @@ Loading:
 
 Buying:
 
-- The bot buys only pump.fun coins still on their bonding curve and quoted in SOL, with a transaction it builds itself. Any other coin (graduated, quoted in another token, a cashback coin, or a curve that could not be read) is skipped with `unsupported_curve`.
+- The bot buys only pump.fun coins still on their bonding curve and quoted in SOL, with a transaction it builds itself. Any other coin (graduated, quoted in another token, or a cashback coin) is skipped with `unsupported_curve`. If the mint or curve cannot be read within the safety budget, the coin is skipped with `check_unknown`.
 - One buy per mint, ever. A buy is refused when the mint is in `purchases`, has a pending trade, or has a buy in progress in this process.
 - `maxSnipes` counts a rule's `purchases`, its pending buys, and its buys in progress.
 - Before the transaction is sent, the bot writes its pending entry and adds the spend reservation (see Money bound) in one write. That write first checks the spend caps: per trade, per rolling hour, total. If the caps refuse or the write fails, nothing is sent.
