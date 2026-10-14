@@ -86,7 +86,7 @@ Use it to follow pump.fun callers: when a caller you track calls a token, buy th
 
 It listens to `account/callout`. Add the callers in the dashboard's Callouts tab too. `calloutKinds` chooses which posts count (`callout` by default; `author_update`, `reply`, and `repost` are later posts about an earlier call). `maxMultiple` skips a call when the event says the token already ran past that multiple. `requireCallerPosition` fires only when the event shows the caller holding the token. The callout's own market cap feeds the `maxMarketCapUsd` filter.
 
-`account/callout_update` only adds detail to an earlier call, so it never buys. With `sellWhenCallerExits`, an update or callout from the same caller that reports `position.amountHeld` of 0 sells the position this rule bought. Callouts are live only.
+`account/callout_update` only adds detail to an earlier call, so it never buys. With `sellWhenCallerExits`, an update or callout from the same caller that reports `position.amountHeld` of 0 sells what this rule bought because of that caller, including a buy still in flight. Callouts are live only.
 
 ## fomo
 
@@ -96,4 +96,4 @@ Use it to follow FOMO users or coins: a thesis from a user you track, any thesis
 { "name": "fomo-theses", "mode": "fomo", "fomoUsers": ["username"], "fomoCoins": [], "fomoEvents": ["thesis"], "excludeKeywords": { "words": ["exit"], "scanDepth": 0 }, "token": { "amountSol": 0.05 } }
 ```
 
-It listens to `account/thesis` and `account/token_verified`. Track users and coins in the dashboard's FOMO tab too. Keyword filters read the thesis text. `token_verified` fires only for coins in `fomoCoins`, once per coin; TweetStream reports when it first observed the verification, which is not a safety or investment signal. With `sellWhenAuthorExits`, a thesis from a watched author that reports `position.closedAt` sells this rule's position and never buys. FOMO events are live only.
+It listens to `account/thesis` and `account/token_verified`. Track users and coins in the dashboard's FOMO tab too. Keyword filters read the thesis text. `token_verified` fires only for coins in `fomoCoins`, once per coin; TweetStream reports when it first observed the verification, which is not a safety or investment signal. With `sellWhenAuthorExits`, a thesis from a watched author that reports `position.closedAt` sells what this rule bought because of that author, and never buys. FOMO events are live only.

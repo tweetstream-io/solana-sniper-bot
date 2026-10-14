@@ -1,6 +1,6 @@
 # Solana sniper bot for X/Twitter signals
 
-This Solana sniper bot buys Solana and pump.fun tokens the moment a watched X account posts a contract address, changes its bio, follows someone, or when a pump.fun caller or FOMO user you track posts about a token. It runs on the [TweetStream](https://tweetstream.io/signup?offer=basic-monthly-trial&utm_source=github&utm_medium=referral&utm_campaign=solana-sniper-bot&utm_content=docs-index) real-time feed and ships TypeScript and Rust versions that share one config and one set of test cases.
+This Solana sniper bot buys Solana and pump.fun tokens the moment a watched X account posts a contract address, changes its bio, follows someone, or when a pump.fun caller or FOMO user you track posts about a token. It runs on the [TweetStream](https://tweetstream.io/signup?offer=basic-monthly-trial&utm_source=github&utm_medium=referral&utm_campaign=solana-sniper-bot&utm_content=docs-index) real-time feed.
 
 The code and a quickstart are on [GitHub](https://github.com/tweetstream-io/solana-sniper-bot). These pages explain how it works:
 

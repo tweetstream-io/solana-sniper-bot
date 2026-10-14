@@ -10,7 +10,7 @@ Each entry in `rules` has one `mode`. A rule reads only the fields for its mode;
 
 | Field | Default | What it does | Latency and safety |
 | --- | --- | --- | --- |
-| `rules[].name` |  | Unique name, used in logs and in the ledger. |  |
+| `rules[].name` |  | Unique name, used in logs and in the state file. |  |
 | `rules[].enabled` | `true` | Turn the rule on or off. |  |
 | `rules[].mode` |  | What makes the rule fire. See docs/modes.md. |  |
 | `rules[].accounts` | `[]` | Accounts to watch: numeric X account id or @handle. | Ids survive handle changes; handles do not. Prefer ids. |
@@ -31,11 +31,11 @@ Each entry in `rules` has one `mode`. A rule reads only the fields for its mode;
 | `rules[].calloutKinds` | `["callout"]` | callout: which callout kinds fire the rule. author_update, reply and repost are later posts about an earlier call. |  |
 | `rules[].maxMultiple` | `null` | callout: skip when the event reports the token already ran more than this multiple since the call. null turns it off. | Safety: buying after a 5x run buys someone else's exit. |
 | `rules[].requireCallerPosition` | `false` | callout: fire only when the event reports that the caller holds the token (position.amountHeld above 0). |  |
-| `rules[].sellWhenCallerExits` | `false` | callout: sell a position this rule bought when a callout or callout_update from the same caller reports position.amountHeld of 0. |  |
+| `rules[].sellWhenCallerExits` | `false` | callout: sell what this rule bought because of a caller when a callout or callout_update from that caller reports position.amountHeld of 0. |  |
 | `rules[].fomoUsers` | `[]` | fomo: FOMO usernames or author ids whose theses fire the rule. Track them in the dashboard's FOMO tab too. |  |
 | `rules[].fomoCoins` | `[]` | fomo: coin addresses. A thesis by any author on one of these fires the rule, and so does the coin's first observed verification. |  |
 | `rules[].fomoEvents` | `["thesis"]` | fomo: fire on theses, on first observed token verification of a watched coin, or both. |  |
-| `rules[].sellWhenAuthorExits` | `false` | fomo: sell a position this rule bought when a watched author's thesis on that coin reports position.closedAt. |  |
+| `rules[].sellWhenAuthorExits` | `false` | fomo: sell what this rule bought because of an author when that author's thesis on the coin reports position.closedAt. |  |
 | `rules[].useDetectedCa` | `false` | engagement, new_tweet, follow, pfp_update: trade the first contract address found in the event (post text, token link, image text, the followed account's bio, or the new bio) when token.mint is empty. |  |
 | `rules[].token.mint` | `""` | The token to trade. ca_scanner, callout and fomo: leave empty to trade the address in the event, or set it to act only on that token. Other modes: required unless useDetectedCa is true. |  |
 | `rules[].token.action` | `"buy"` | buy spends amountSol. sell sells the whole position in this token. |  |
@@ -54,9 +54,9 @@ Each entry in `rules` has one `mode`. A rule reads only the fields for its mode;
 | `rules[].filters.skipIfAlreadyHolding` | `true` | Skip a mint the bot still holds. |  |
 | `rules[].filters.onMissingData` | `"reject"` | What to do when a filter needs data that is not available in time. | reject is the safe choice: unknown never counts as passing. |
 | `rules[].fees.slippagePct` | `20` | Largest price move you accept, in percent. | Too low and fast-moving launches fail; too high and you overpay. |
-| `rules[].fees.priorityFeeSol` | `"auto"` | Priority fee for the whole transaction in SOL, or auto for a recent-fee estimate. | auto reads a cached estimate refreshed in the background, so it adds no latency. |
+| `rules[].fees.priorityFeeSol` | `"auto"` | Priority fee for the whole transaction in SOL, or auto for a recent-fee estimate. | auto reads a cached estimate refreshed in the background, so it adds no latency. The whole fee counts against the spend caps. |
 | `rules[].fees.tipSol` | `"auto"` | Tip paid to the Jito block engine in SOL, or auto for the recent landed-tip level. | Only paid when antiMev is on. |
-| `rules[].fees.antiMev` | `true` | Also send through the Jito block engine, which protects the transaction from sandwiching. |  |
+| `rules[].fees.antiMev` | `true` | Send only through the Jito block engine, with a tip, which protects the transaction from sandwiching. Off: send to every RPC and extra sender instead. | Jupiter trades are landed by Jupiter and ignore this. |
 | `rules[].fees.retriesOnGraduation` | `1` | If a pump.fun coin finishes its bonding curve while you buy, retry this many times through Jupiter. | Retries only after a definite failure, never after an unknown outcome. |
 
 ## Everything else

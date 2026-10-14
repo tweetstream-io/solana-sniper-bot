@@ -31,7 +31,7 @@ The bot logs these for every signal and prints p50 and p95 on exit (Ctrl+C):
 | `signed->first ack` | monotonic | until the first sender accepts the transaction; the report names that sender |
 | `send->confirmed` | monotonic | until the RPC WebSocket reports the signature confirmed |
 
-`publish->receipt` measures the feed hop, which [TweetStream's speed check](https://tweetstream.io/speedcheck) reports from X timestamp to TweetStream server receipt. The other stages are the bot's own. Image text (`tweet/meta`) arrives after the post, so a signal from OCR shows a larger `publish->receipt`.
+`publish->receipt` measures the feed hop, which [TweetStream's speed check](https://tweetstream.io/speedcheck?utm_source=github&utm_medium=referral&utm_campaign=solana-sniper-bot&utm_content=docs-latency) reports from X timestamp to TweetStream server receipt. The other stages are the bot's own. Image text (`tweet/meta`) arrives after the post, so a signal from OCR shows a larger `publish->receipt`.
 
 Which sender's copy landed cannot be observed: every sender gets the same signed transaction, so the chain shows one signature. The report names the first sender to accept it.
 
@@ -47,9 +47,11 @@ pump.fun buys are built locally with `buy_exact_quote_in_v3`, following the offi
 
 Safety checks. pump.fun creates curve mints itself, with authorities the program fixes, so the mint and freeze authority checks are skipped on the curve. Elsewhere they run in parallel with any market data and Rugcheck call, all under `safety.budgetMs`.
 
-Transaction. The blockhash is refreshed every 400 ms in the background, the priority fee estimate (75th percentile of nonzero fees in recent slots) every 2 seconds, the Jito tip level every 10 seconds, and the SOL price every 30 seconds; a buy reads them from memory. The compute unit limit is set (`execution.computeUnitLimit`), so the priority fee per unit is known. Signing uses Node's native Ed25519, about 5 times faster than the JavaScript signer.
+Recording. Before a transaction goes out, the bot writes it to `state/live.json` and waits for the disk to confirm (fsync). On our test machine (NVMe, ext4) the write with fsync takes about 0.3 ms at p50 and 0.6 ms at p95. It is the one delay the bot adds on purpose: without it, a crash right after sending could leave a buy nobody tracks.
 
-Landing. The signed transaction goes to every RPC in `SOLANA_RPC_URLS`, to Jito, and to every extra sender in `senders`, all at once, with `skipPreflight: true` and `maxRetries: 0`. The bot rebroadcasts it every 1.5 seconds until it confirms or its blockhash expires. One transaction carries every tip (Jito and any sender's), so the same bytes can go everywhere; you pay each tip whichever sender lands it.
+Transaction. The blockhash and the current block height (`getEpochInfo`) are refreshed every 400 ms in the background, and a blockhash older than 10 seconds is never used, the priority fee estimate (75th percentile of nonzero fees in recent slots) every 2 seconds, the Jito tip level every 10 seconds, the SOL price every 30 seconds, and pump.fun's fee tiers every minute; a buy reads them from memory. The compute unit limit is set (`execution.computeUnitLimit`), so the priority fee per unit is known. Signing uses Node's native Ed25519, about 5 times faster than the JavaScript signer.
+
+Landing. With `antiMev` on (the default), the signed transaction goes only to the Jito block engine, carrying its tip; that is the route that protects it from sandwiching. With `antiMev` off, it goes to every RPC in `SOLANA_RPC_URLS` and every extra sender in `senders` at once, with `skipPreflight: true` and `maxRetries: 0`; one transaction carries every sender's tip, so the same bytes go everywhere, and you pay each tip whichever sender lands it. The bot rebroadcasts every 1.5 seconds until the transaction confirms or its blockhash expires.
 
 Confirmation. A `signatureSubscribe` subscription on the RPC WebSocket, opened at startup and subscribed before the send, pushes the result. Polling would add up to one poll interval.
 
@@ -64,10 +66,10 @@ It feeds 2,000 posts, each with a new mint, through the real decision and tradin
 
 ```text
 2000 posts, each with a new mint, on linux x64, Node v22.23.1
-receipt->decision (JSON.parse + dedupe + detect + rules): p50 43.0 us, p95 54.6 us
-safety read: p50 0.899 ms, p95 1.772 ms, n=2000
-build+sign: p50 0.44 ms, p95 0.553 ms, n=2000
-decision->signed: p50 1.441 ms, p95 2.327 ms, n=2000
+receipt->decision (JSON.parse + dedupe + detect + rules): p50 51.1 us, p95 75.5 us
+safety read: p50 0.989 ms, p95 1.818 ms, n=2000
+build+sign: p50 0.439 ms, p95 0.645 ms, n=2000
+decision->signed: p50 1.612 ms, p95 2.399 ms, n=2000
 ```
 
-So from receipt to a signed pump.fun buy the bot spends about 0.5 ms of its own time, plus one RPC round trip. Most of `build+sign` is compiling the v0 message and deriving the addresses the read did not cover.
+So from receipt to a signed pump.fun buy the bot spends about 0.5 ms of its own time, plus one RPC round trip. Most of `build+sign` is compiling the v0 message and deriving the addresses the read did not cover. A live buy then adds the state write before sending (about 0.3 ms, see Recording above). The benchmark is a dry run, which skips that write.

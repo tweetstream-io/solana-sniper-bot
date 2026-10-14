@@ -34,16 +34,18 @@ Rugcheck rarely has a report for a token minutes old inside a 150 ms budget, so 
 
 ## Limits that hold across restarts
 
-`state/ledger.json` records every mint the bot traded, the snipes each rule used, the SOL spent, and open positions. It is written after every change with a temp file and a rename, so a crash never leaves half a file. If it is damaged the bot refuses to start, because deleting it lets the bot buy the same tokens again.
+`state/live.json` records every trade, the mints bought, the snipes each rule used, the SOL spent, and open positions. Dry runs use `state/dry-run.json`, so a dry run never uses up live limits. Each write goes to a temp file, is flushed to disk, and replaces the old file, so a crash leaves either the old state or the new one. If the file is damaged or of another version, the bot refuses to start, because deleting it lets the bot buy the same tokens again.
 
-- One trade per mint: the first signal reserves the mint before any network call, so two signals in the same millisecond cannot both buy. A buy whose outcome is unknown (sent, never confirmed) also blocks the mint.
+- A transaction is written to the state file, with its signature and signed bytes, before it is sent. If that write fails the bot does not send. After a crash, the bot finds every transaction it may have sent and checks it on chain; a buy that landed opens its position then.
+- A buy whose outcome is unknown (sent, never confirmed) keeps its spend and blocks the mint until the reconciler learns whether it landed or expired.
+- One buy per mint: the first signal reserves the mint before any network call, so two signals in the same millisecond cannot both buy. A mint stays bought after the position is sold.
 - `filters.maxSnipes` (1 by default) and `filters.cooldownSec` per rule.
-- `spend.maxPerTradeSol`, `spend.maxPerHourSol`, and `spend.maxTotalSol`, reserved before the transaction is built and refunded only when nothing was sent or the transaction failed on chain.
+- `spend.maxPerTradeSol`, `spend.maxPerHourSol`, and `spend.maxTotalSol` count the largest amount a buy can take from the wallet: the amount, fees, tips, and account rent. The reservation becomes the actual cost once it is known, and is refunded only when nothing was sent or the transaction expired.
 - `maxSignalAgeMs` (5 seconds) skips posts that arrive late, for example after a reconnect.
 
 ## Exits
 
-Open positions are priced every `exits.pollMs`: pump.fun curve tokens from one account read, others from a Jupiter quote. The bot sells at `takeProfitPct`, `stopLossPct`, or after `maxHoldSec`. It also sells when the post it bought on is deleted (`sellOnDelete`), when a tracked pump.fun caller reports holding none of the token (`sellWhenCallerExits`), and when a tracked FOMO author closes the position (`sellWhenAuthorExits`). In dry run every exit is logged and nothing is sent.
+Open positions are priced every `exits.pollMs`: pump.fun curve tokens from one account read, others from a Jupiter quote. The bot sells at `takeProfitPct`, `stopLossPct`, or after `maxHoldSec`. It also sells when the post it bought on is deleted (`sellOnDelete`), when the pump.fun caller whose call triggered the buy reports holding none of the token (`sellWhenCallerExits`), and when the FOMO author whose thesis triggered it closes the position (`sellWhenAuthorExits`). An exit that arrives while the buy is still pending is kept and applied when the buy lands. A position has at most one sell in flight; a sell with an unknown outcome is checked and rebroadcast before another is built. In dry run every exit is logged and nothing is sent.
 
 ## Going live
 
