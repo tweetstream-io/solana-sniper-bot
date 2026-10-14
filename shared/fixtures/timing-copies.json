@@ -1,0 +1,560 @@
+{
+  "name": "timing-copies",
+  "description": "Copies of one event can carry different timing values (receivedAt, observedAt, deletedAt, at any depth); they are still one event. Each pair here differs only in those values, so the second copy produces nothing. Updates with different text are new events, including a second update of the same post.",
+  "config": {
+    "rules": [
+      {
+        "name": "scan",
+        "mode": "ca_scanner",
+        "accounts": [
+          "111"
+        ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      },
+      {
+        "name": "bio-ca",
+        "mode": "follow",
+        "accounts": [
+          "111"
+        ],
+        "useDetectedCa": true
+      }
+    ]
+  },
+  "positions": [
+    {
+      "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
+      "postKey": "twitter:2026541124285366272",
+      "rule": "scan"
+    }
+  ],
+  "events": [
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000030050,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000030050,
+        "d": {
+          "tweetId": "2026541124285366272",
+          "text": "CA FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+          "createdAt": 1772000030000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "receivedAt": 1772000030030
+        },
+        "id": "2026541124285366272"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000030054,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000030054,
+        "d": {
+          "tweetId": "2026541124285366272",
+          "text": "CA FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+          "createdAt": 1772000030000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "receivedAt": 1772000030034
+        },
+        "id": "2026541124285366272"
+      }
+    },
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000030200,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "update",
+        "ts": 1772000030200,
+        "d": {
+          "tweetId": "2026541124285366272",
+          "platform": "twitter",
+          "text": "CA FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA and H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+          "textUpdateType": "completion",
+          "receivedAt": 1772000030180
+        },
+        "id": "2026541124285366272"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000030204,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "update",
+        "ts": 1772000030204,
+        "d": {
+          "tweetId": "2026541124285366272",
+          "platform": "twitter",
+          "text": "CA FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA and H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+          "textUpdateType": "completion",
+          "receivedAt": 1772000030184
+        },
+        "id": "2026541124285366272"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000030250,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "update",
+        "ts": 1772000030250,
+        "d": {
+          "tweetId": "2026541124285366272",
+          "platform": "twitter",
+          "text": "CA FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA and H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29, chart soon",
+          "receivedAt": 1772000030230
+        },
+        "id": "2026541124285366272"
+      }
+    },
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000030300,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "meta",
+        "ts": 1772000030300,
+        "d": {
+          "tweetId": "2026541124285366272",
+          "platform": "twitter",
+          "ocr": {
+            "text": "image 7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN"
+          },
+          "receivedAt": 1772000030280
+        },
+        "id": "2026541124285366272"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000030304,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "meta",
+        "ts": 1772000030304,
+        "d": {
+          "tweetId": "2026541124285366272",
+          "platform": "twitter",
+          "ocr": {
+            "text": "image 7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN"
+          },
+          "receivedAt": 1772000030284
+        },
+        "id": "2026541124285366272"
+      }
+    },
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000030400,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "pin",
+        "ts": 1772000030400,
+        "d": {
+          "action": "pin",
+          "tweetId": "2026540872627126272",
+          "platform": "twitter",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "eventId": "pin-t",
+          "observedAt": 1772000030380,
+          "tweet": {
+            "tweetId": "2026540872627126272",
+            "text": "pinned AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+            "createdAt": 1771999970000,
+            "kind": "post",
+            "author": {
+              "id": "111",
+              "handle": "@dev_one"
+            },
+            "receivedAt": 1772000030375
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000030404,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "pin",
+        "ts": 1772000030404,
+        "d": {
+          "action": "pin",
+          "tweetId": "2026540872627126272",
+          "platform": "twitter",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "eventId": "pin-t",
+          "observedAt": 1772000030384,
+          "tweet": {
+            "tweetId": "2026540872627126272",
+            "text": "pinned AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+            "createdAt": 1771999970000,
+            "kind": "post",
+            "author": {
+              "id": "111",
+              "handle": "@dev_one"
+            },
+            "receivedAt": 1772000030379
+          }
+        }
+      }
+    },
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000030500,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "follow",
+        "ts": 1772000030500,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "target": {
+            "id": "500",
+            "handle": "@launchpad",
+            "bio": "token 3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd"
+          },
+          "eventId": "f-t",
+          "kind": "FOLLOW",
+          "observedAt": 1772000030480
+        },
+        "id": "f-t"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000030504,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "follow",
+        "ts": 1772000030504,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "target": {
+            "id": "500",
+            "handle": "@launchpad",
+            "bio": "token 3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd"
+          },
+          "eventId": "f-t",
+          "kind": "FOLLOW",
+          "observedAt": 1772000030484
+        },
+        "id": "f-t"
+      }
+    },
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000030600,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": 1772000030600,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "changes": {
+            "bio": "now GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo"
+          },
+          "previous": {
+            "bio": "builder"
+          },
+          "eventId": "p-t",
+          "kind": "PROFILE",
+          "observedAt": 1772000030580
+        },
+        "id": "p-t"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000030604,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": 1772000030604,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "changes": {
+            "bio": "now GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo"
+          },
+          "previous": {
+            "bio": "builder"
+          },
+          "eventId": "p-t",
+          "kind": "PROFILE",
+          "observedAt": 1772000030584
+        },
+        "id": "p-t"
+      }
+    },
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000030700,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "delete",
+        "ts": 1772000030700,
+        "d": {
+          "tweetId": "2026541124285366272",
+          "platform": "twitter",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "eventId": "del-t",
+          "deletedAt": 1772000030680
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000030704,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "delete",
+        "ts": 1772000030704,
+        "d": {
+          "tweetId": "2026541124285366272",
+          "platform": "twitter",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "eventId": "del-t",
+          "deletedAt": 1772000030684
+        }
+      }
+    }
+  ],
+  "expectedSignals": [
+    {
+      "event": "tweet/content twitter:2026541124285366272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/update twitter:2026541124285366272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/update twitter:2026541124285366272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/update twitter:2026541124285366272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/update twitter:2026541124285366272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/meta twitter:2026541124285366272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/meta twitter:2026541124285366272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/meta twitter:2026541124285366272",
+      "source": "ocr",
+      "chain": "solana",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "confidence": "medium",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/pin twitter:2026540872627126272",
+      "source": "pin",
+      "chain": "solana",
+      "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "account/follow f-t",
+      "source": "follow_bio",
+      "chain": "solana",
+      "mint": "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd",
+      "confidence": "medium",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "account/profile_update p-t",
+      "source": "profile",
+      "chain": "solana",
+      "mint": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "tweet/content twitter:2026541124285366272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "source": "text"
+    },
+    {
+      "event": "tweet/update twitter:2026541124285366272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "source": "text"
+    },
+    {
+      "event": "tweet/meta twitter:2026541124285366272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "source": "ocr"
+    },
+    {
+      "event": "tweet/pin twitter:2026540872627126272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+      "source": "pin"
+    },
+    {
+      "event": "account/follow f-t",
+      "rule": "bio-ca",
+      "decision": "fire",
+      "mint": "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd",
+      "source": "follow_bio"
+    },
+    {
+      "event": "account/profile_update p-t",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
+      "source": "profile"
+    },
+    {
+      "event": "tweet/delete twitter:2026541124285366272",
+      "decision": "exit",
+      "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
+      "code": "post_deleted"
+    }
+  ]
+}

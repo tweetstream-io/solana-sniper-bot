@@ -125,7 +125,7 @@ What each rule did with an event. A rule the event does not concern produces not
 - Order within one event: all `fire`, then all `skip`, then all `exit`. Within each group, rules in config order; within a rule, signals in signal order.
 - A rule fires at most once per post (`engagement`, `new_tweet` on posts), per event (`follow`, `pfp_update`, `new_tweet` on bios), or per mint (`ca_scanner`, `callout`, `fomo`). A repeat is silent. A skip does not use up that chance.
 - `maxSnipes` (0 = no limit) counts a rule's buys (see Trade state) and `cooldownSec` spaces out its fires. A fire that sends nothing is given back: its snipe and its fire-once key are released.
-- A repeated event produces nothing, whichever connection it came on. An event repeats when its `t`, its `op`, and its payload `d` equal an earlier event's. Compare `d` as a JSON value, so key order does not matter. The envelope `ts` and `id` play no part: the Ultra and standard copies of one event differ only in `ts`, and the server gives every `tweet/update` and `tweet/meta` of a post the same `id`.
+- A repeated event produces nothing, whichever connection it came on. An event repeats when its `t`, its `op`, and its payload `d` equal an earlier event's. Compare `d` as a JSON value, so key order does not matter, after removing every key named `receivedAt`, `observedAt`, or `deletedAt` at any depth: timing fields may differ between copies of the same event and are ignored for dedupe. The envelope `ts` and `id` play no part either; the server gives every `tweet/update` and `tweet/meta` of a post the same `id`.
 
 ## Trade state
 

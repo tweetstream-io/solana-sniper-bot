@@ -1,6 +1,6 @@
 {
   "name": "deep-reference",
-  "description": "Reference chains run up to seven levels. An address five levels down is found, and a keyword six levels down matches a scanDepth of 6.",
+  "description": "Reference chains run up to seven levels. Addresses five and seven levels down are found, and a keyword six levels down matches a scanDepth of 6.",
   "config": {
     "rules": [
       {
@@ -111,7 +111,7 @@
                           "id": "307",
                           "handle": "@level7"
                         },
-                        "text": "level 7"
+                        "text": "bottom GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo"
                       }
                     }
                   }
@@ -135,6 +135,18 @@
         "id": "111",
         "handle": "dev_one"
       }
+    },
+    {
+      "event": "tweet/content twitter:2026541082342326272",
+      "source": "reference",
+      "chain": "solana",
+      "mint": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
+      "confidence": "medium",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
     }
   ],
   "expectedDecisions": [
@@ -143,6 +155,13 @@
       "rule": "scan",
       "decision": "fire",
       "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "source": "reference"
+    },
+    {
+      "event": "tweet/content twitter:2026541082342326272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
       "source": "reference"
     },
     {
