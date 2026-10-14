@@ -86,7 +86,7 @@ impl RuleEngine {
     /// Call at most once per fire.
     pub fn release(&mut self, fire: &Fire) {
         if self.fired.remove(&fire.fire_key) {
-            self.book.release_snipe(&self.config.rules[fire.rule].name, &fire.mint);
+            self.book.release_snipe(&fire.fire_key);
         }
     }
 
@@ -103,7 +103,7 @@ impl RuleEngine {
             out.skips.push(Skip { rule: fire.rule, code: SkipCode::Cooldown, detail: format!("{left} s left") });
             return;
         }
-        if !self.book.claim_snipe(&rule.name, &fire.mint, rule.filters.max_snipes) {
+        if !self.book.claim_snipe(&rule.name, &fire.fire_key, rule.filters.max_snipes) {
             let detail = format!("maxSnipes {} reached", rule.filters.max_snipes);
             out.skips.push(Skip { rule: fire.rule, code: SkipCode::MaxSnipes, detail });
             return;

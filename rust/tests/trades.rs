@@ -52,7 +52,7 @@ fn wide() -> Spend {
 
 fn reserve(book: &TradeBook, mint: &str, rule: &str) -> Result<Ticket, ReserveError> {
     let trigger = Trigger { event_ref: "tweet/content twitter:1".to_string(), post_key: Some("twitter:1".to_string()) };
-    book.reserve_buy(BuyRequest { mint, rule, trigger, now: 1_000 })
+    book.reserve_buy(BuyRequest { mint, rule, fire_key: mint, trigger, now: 1_000 })
 }
 
 fn sent(reserved: u64, amount: u64) -> Sent {

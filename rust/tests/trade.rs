@@ -87,6 +87,8 @@ struct JupiterScenario {
     market_maker_signs_first: bool,
     /// A signature that lands on chain at the moment the blockhash is checked.
     lands_at_validity_check: Mutex<Option<String>>,
+    /// `getTransaction` never answers, so whoever asks for a debit waits forever.
+    hang_debit: bool,
 }
 
 impl Network for JupiterScenario {
@@ -109,6 +111,9 @@ impl Network for JupiterScenario {
         self.inner.is_blockhash_valid(blockhash).await
     }
     async fn transaction_debit(&self, signature: &str, owner: &str) -> NetResult<Option<i128>> {
+        if self.hang_debit {
+            std::future::pending::<()>().await;
+        }
         self.inner.transaction_debit(signature, owner).await
     }
     async fn jupiter_order(&self, request: OrderRequest) -> NetResult<JupiterOrder> {
@@ -490,7 +495,14 @@ async fn a_mint_already_bought_is_refused_at_once_and_its_fire_given_back() {
 fn jupiter_network(execute: Execute, hang: bool, market_maker_signs_first: bool) -> (Arc<JupiterScenario>, Arc<ScenarioNetwork>) {
     let scenario = Arc::new(ScenarioNetwork::new(chain()));
     let lands_at_validity_check = Mutex::new(None);
-    let network = JupiterScenario { inner: Arc::clone(&scenario), execute, hang, market_maker_signs_first, lands_at_validity_check };
+    let network = JupiterScenario {
+        inner: Arc::clone(&scenario),
+        execute,
+        hang,
+        market_maker_signs_first,
+        lands_at_validity_check,
+        hang_debit: false,
+    };
     (Arc::new(network), scenario)
 }
 
@@ -505,6 +517,27 @@ const LANDED_SIG: &str = "99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1
 fn jupiter_answer(status: &str, code: i64, signature: Option<&str>) -> Execute {
     let (status, signature) = (status.to_string(), signature.map(str::to_string));
     Box::new(move || Ok(JupiterExecute { status: status.clone(), code, signature: signature.clone(), error: None }))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_jupiter_sell_that_succeeds_is_recorded_without_waiting_for_its_debit() {
+    // The market maker signs first, so only Jupiter's answer names the transaction; a debit read
+    // that never returns must not stand between that answer and the write that records it.
+    let scenario = Arc::new(ScenarioNetwork::new(chain()));
+    let network = Arc::new(JupiterScenario {
+        inner: Arc::clone(&scenario),
+        execute: jupiter_answer("Success", 0, Some(LANDED_SIG)),
+        hang: false,
+        market_maker_signs_first: true,
+        lands_at_validity_check: Mutex::new(None),
+        hang_debit: true,
+    });
+    let t = setup(network, scenario, Options { initial: graduated(), ..options() }).await;
+    let sold = tokio::time::timeout(Duration::from_secs(3), t.trader.sell(PLAIN_MINT, "test")).await;
+    let state = state(&t);
+    assert_eq!(state["pending"], json!({}), "nothing left for manual review");
+    assert!(state["positions"].get(PLAIN_MINT).is_none());
+    assert_eq!(sold.ok(), Some(SellResult::Sold));
 }
 
 /// A position in a mint that is not on a curve, so its sell goes through Jupiter.

@@ -267,7 +267,7 @@ impl<N: Network> Trader<N> {
         let rule = &config.rules[fire.rule];
         let plan = self.fee_plan(rule);
         let trigger = Trigger { event_ref: trace.event_ref.clone(), post_key: fire.signal.as_ref().and_then(|s| s.post_key.clone()) };
-        let request = BuyRequest { mint: &fire.mint, rule: &rule.name, trigger, now: unix_ms() };
+        let request = BuyRequest { mint: &fire.mint, rule: &rule.name, fire_key: &fire.fire_key, trigger, now: unix_ms() };
         match book.reserve_buy(request) {
             Ok(ticket) => Some(ReservedBuy { ticket, plan }),
             Err(reason) => {
@@ -507,9 +507,11 @@ impl<N: Network> Trader<N> {
         let error = format!("Jupiter code {}{}", result.code, result.error.as_ref().map(|e| format!(": {e}")).unwrap_or_default());
         let outcome = match jupiter_code(result.code) {
             // A success must say so and name a signature to check on chain; anything less waits.
+            // Jupiter only sells, and a sell keeps its reservation whatever it cost, so nothing is
+            // awaited between this answer and the write that records it.
             JupiterCode::Landed => match signature.clone().or_else(|| built.signed.signature()) {
-                Some(signature) if result.status == "Success" => {
-                    return TradeOutcome::Landed { token_amount: None, spent_lamports: self.debit(&signature).await };
+                Some(_) if result.status == "Success" => {
+                    return TradeOutcome::Landed { token_amount: None, spent_lamports: None };
                 }
                 Some(_) | None => TradeOutcome::Unknown { error: format!("{error}, status {}, no usable signature", result.status) },
             },

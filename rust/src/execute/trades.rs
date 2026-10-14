@@ -250,6 +250,8 @@ pub struct BuyRequest<'a> {
     pub mint: &'a str,
     /// The rule.
     pub rule: &'a str,
+    /// The fire it is for; its claim on the rule's `maxSnipes` becomes this buy.
+    pub fire_key: &'a str,
     /// The event.
     pub trigger: Trigger,
     /// Wall clock ms.
@@ -379,7 +381,8 @@ struct Book {
     tickets: HashMap<String, Ticket>,
     /// Pending trades whose write has not completed; the reconciler does not see them yet.
     unpersisted: HashSet<String>,
-    /// Fires the rule engine admitted whose buy is not reserved yet, as (rule, mint).
+    /// Fires the rule engine admitted whose buy is not reserved yet, as (rule, fire key). A fire
+    /// key names one fire: the engine admits it again only after releasing it.
     claims: Vec<(String, String)>,
     next_id: u64,
     generation: u64,
@@ -578,24 +581,24 @@ impl TradeBook {
         buys_by_rule(&self.lock(), rule)
     }
 
-    /// Claims one of a rule's `maxSnipes` (0 means no limit) for a fire on `mint`, counting the
+    /// Claims one of a rule's `maxSnipes` (0 means no limit) for the fire `fire_key`, counting the
     /// rule's purchases, pending buys, buys in progress, and earlier claims. Reserving the buy
     /// turns the claim into a buy in progress; [`TradeBook::release_snipe`] gives it back.
     /// Returns false when the rule has none left.
-    pub fn claim_snipe(&self, rule: &str, mint: &str, max_snipes: u64) -> bool {
+    pub fn claim_snipe(&self, rule: &str, fire_key: &str, max_snipes: u64) -> bool {
         let mut book = self.lock();
         let claimed = book.claims.iter().filter(|(r, _)| r == rule).count() as u64;
         if max_snipes > 0 && buys_by_rule(&book, rule) + claimed >= max_snipes {
             return false;
         }
-        book.claims.push((rule.to_string(), mint.to_string()));
+        book.claims.push((rule.to_string(), fire_key.to_string()));
         true
     }
 
-    /// Gives back a claim whose buy was never reserved. A claim already turned into a buy is not
-    /// held any more, so this changes nothing for it.
-    pub fn release_snipe(&self, rule: &str, mint: &str) {
-        take_claim(&mut self.lock(), rule, mint);
+    /// Gives back the claim of a fire whose buy was never reserved. A claim already turned into a
+    /// buy is not held any more, so this changes nothing for it or for any other fire's claim.
+    pub fn release_snipe(&self, fire_key: &str) {
+        take_claim(&mut self.lock(), fire_key);
     }
 
     /// Reserves a buy in memory: one buy per mint per state file, so it is refused while the mint
@@ -605,9 +608,9 @@ impl TradeBook {
     ///
     /// Returns why the buy was refused.
     pub fn reserve_buy(&self, request: BuyRequest) -> Result<Ticket, ReserveError> {
-        let BuyRequest { mint, rule, trigger, now } = request;
+        let BuyRequest { mint, rule, fire_key, trigger, now } = request;
         let mut book = self.lock();
-        take_claim(&mut book, rule, mint);
+        take_claim(&mut book, fire_key);
         if book.state.purchases.contains_key(mint) || book.state.positions.contains_key(mint) {
             return Err(ReserveError::AlreadyBought);
         }
@@ -862,8 +865,8 @@ impl TradeBook {
     }
 }
 
-fn take_claim(book: &mut Book, rule: &str, mint: &str) {
-    if let Some(at) = book.claims.iter().position(|(r, m)| r == rule && m == mint) {
+fn take_claim(book: &mut Book, fire_key: &str) {
+    if let Some(at) = book.claims.iter().position(|(_, key)| key == fire_key) {
         book.claims.swap_remove(at);
     }
 }

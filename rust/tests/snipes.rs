@@ -7,17 +7,18 @@ use serde_json::json;
 use solana_sniper_bot::execute::trades::{BuyRequest, Mode, Sent, TradeBook, TradeOutcome, TradeRoute, Trigger};
 use solana_sniper_bot::pipeline::{Decider, Outcome};
 use solana_sniper_bot::protocol::Envelope;
+use solana_sniper_bot::rules::modes::Fire;
 use solana_sniper_bot::setup::config::{Spend, parse_config};
 
 const FIRST: &str = "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA";
 const SECOND: &str = "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29";
 
 fn decider(book: &Arc<TradeBook>) -> Decider {
-    let config = parse_config(json!({
-        "rules": [{ "name": "dev", "mode": "ca_scanner", "accounts": ["111"], "filters": { "maxSnipes": 1 } }]
-    }))
-    .unwrap();
-    Decider::new(Arc::new(config), Arc::clone(book))
+    decider_with(book, json!({ "name": "dev", "mode": "ca_scanner", "accounts": ["111"], "filters": { "maxSnipes": 1 } }))
+}
+
+fn decider_with(book: &Arc<TradeBook>, rule: serde_json::Value) -> Decider {
+    Decider::new(Arc::new(parse_config(json!({ "rules": [rule] })).unwrap()), Arc::clone(book))
 }
 
 fn post(decider: &mut Decider, tweet_id: u64, mint: &str) -> Outcome {
@@ -28,10 +29,14 @@ fn post(decider: &mut Decider, tweet_id: u64, mint: &str) -> Outcome {
     decider.handle(&envelope, ((tweet_id >> 22) + 1_288_834_974_657) as i64)
 }
 
-/// What the trader does with a fire: reserve the buy, write it as pending, then record `outcome`.
-fn buy(book: &TradeBook, mint: &str, outcome: TradeOutcome) {
+fn reserve(book: &TradeBook, fire: &Fire) -> solana_sniper_bot::execute::trades::Ticket {
     let trigger = Trigger { event_ref: "e".to_string(), post_key: None };
-    let ticket = book.reserve_buy(BuyRequest { mint, rule: "dev", trigger, now: 1_000 }).unwrap();
+    book.reserve_buy(BuyRequest { mint: &fire.mint, rule: "dev", fire_key: &fire.fire_key, trigger, now: 1_000 }).unwrap()
+}
+
+/// What the trader does with a fire: reserve the buy, write it as pending, then record `outcome`.
+fn buy(book: &TradeBook, fire: &Fire, outcome: TradeOutcome) {
+    let ticket = reserve(book, fire);
     let sent = Sent {
         route: TradeRoute::Pump,
         signature: Some("sig".to_string()),
@@ -55,8 +60,8 @@ fn a_buy_that_expired_or_failed_gives_the_rule_its_snipe_back() {
     for outcome in outcomes {
         let book = Arc::new(TradeBook::open(None, Mode::DryRun).unwrap());
         let mut decider = decider(&book);
-        assert_eq!(post(&mut decider, 2_026_541_002_650_550_272, FIRST).fires.len(), 1);
-        buy(&book, FIRST, outcome.clone());
+        let first = post(&mut decider, 2_026_541_002_650_550_272, FIRST);
+        buy(&book, &first.fires[0], outcome.clone());
         assert_eq!(book.buys_by_rule("dev"), 0, "{outcome:?} is not a buy");
         let next = post(&mut decider, 2_026_541_006_844_854_272, SECOND);
         assert_eq!(next.fires.len(), 1, "after {outcome:?} the rule may buy again: {:?}", next.skips);
@@ -67,9 +72,9 @@ fn a_buy_that_expired_or_failed_gives_the_rule_its_snipe_back() {
 fn a_fire_counts_until_its_buy_is_reserved_and_a_landed_buy_keeps_counting() {
     let book = Arc::new(TradeBook::open(None, Mode::DryRun).unwrap());
     let mut decider = decider(&book);
-    assert_eq!(post(&mut decider, 2_026_541_002_650_550_272, FIRST).fires.len(), 1);
+    let first = post(&mut decider, 2_026_541_002_650_550_272, FIRST);
     assert_eq!(post(&mut decider, 2_026_541_006_844_854_272, SECOND).fires.len(), 0, "the first fire holds the only snipe");
-    buy(&book, FIRST, TradeOutcome::Landed { token_amount: None, spent_lamports: None });
+    buy(&book, &first.fires[0], TradeOutcome::Landed { token_amount: None, spent_lamports: None });
     let third = post(&mut decider, 2_026_541_011_039_158_272, SECOND);
     assert!(third.fires.is_empty(), "the landed buy uses the snipe: {:?}", third.skips);
 }
@@ -82,4 +87,20 @@ fn a_released_fire_gives_its_claim_back() {
     decider.release(&first.fires[0]);
     let next = post(&mut decider, 2_026_541_006_844_854_272, SECOND);
     assert_eq!(next.fires.len(), 1, "the refused or filtered fire bought nothing: {:?}", next.skips);
+}
+
+#[test]
+fn releasing_a_fire_whose_buy_was_reserved_leaves_another_fires_claim_on_the_same_mint() {
+    let book = Arc::new(TradeBook::open(None, Mode::DryRun).unwrap());
+    let rule = json!({ "name": "dev", "mode": "new_tweet", "accounts": ["111"], "useDetectedCa": true, "filters": { "maxSnipes": 1 } });
+    let mut decider = decider_with(&book, rule);
+    // Fire A's buy is reserved, then dropped before sending (a gate refusal, say).
+    let a = post(&mut decider, 2_026_541_002_650_550_272, FIRST).fires.remove(0);
+    book.cancel(&reserve(&book, &a));
+    // Fire B, from another post on the same mint, claims the only snipe; then A is released.
+    let b = post(&mut decider, 2_026_541_006_844_854_272, FIRST);
+    assert_eq!(b.fires.len(), 1);
+    decider.release(&a);
+    let c = post(&mut decider, 2_026_541_011_039_158_272, SECOND);
+    assert!(c.fires.is_empty(), "B still holds the snipe: {:?}", c.fires);
 }
