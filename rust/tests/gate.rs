@@ -7,10 +7,10 @@ use std::time::Duration;
 use serde_json::json;
 use solana_pubkey::Pubkey;
 use solana_sniper_bot::execute::pump::{PUMP_PROGRAM, TOKEN_2022_PROGRAM, TOKEN_PROGRAM, bonding_curve_address};
-use solana_sniper_bot::filters::gate::{GateCode, GateDeps, GateResult, Route, Verdict, run_gate};
+use solana_sniper_bot::filters::gate::{GateCode, GateDeps, GateResult, GateVerdict, run_gate};
 use solana_sniper_bot::network::AccountData;
 use solana_sniper_bot::scenario::{ChainSpec, ScenarioNetwork};
-use solana_sniper_bot::setup::config::{Config, PumpBuilder, parse_config};
+use solana_sniper_bot::setup::config::{Config, parse_config};
 
 const MINT: &str = "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA";
 
@@ -69,13 +69,7 @@ fn config(filters: serde_json::Value, budget_ms: u64) -> Config {
 
 async fn gate(net: &ScenarioNetwork, config: &Config) -> GateResult {
     let mint: Pubkey = MINT.parse().unwrap();
-    let deps = GateDeps {
-        safety: &config.safety,
-        pump_builder: PumpBuilder::Local,
-        sol_usd: Some(150.0),
-        epoch: Some(850),
-        wallet: Pubkey::new_unique(),
-    };
+    let deps = GateDeps { safety: &config.safety, sol_usd: Some(150.0), epoch: Some(850), wallet: Pubkey::new_unique() };
     run_gate(net, &mint, &config.rules[0], None, &deps).await
 }
 
@@ -85,33 +79,32 @@ fn curve_key() -> String {
 
 fn code(result: &GateResult) -> Option<GateCode> {
     match &result.verdict {
-        Verdict::Fail { code, detail: _ } => Some(*code),
-        Verdict::Pass { route: _, token_program: _ } => None,
+        GateVerdict::Fail { code, detail: _ } => Some(*code),
+        GateVerdict::Pass { curve: _, token_program: _ } => None,
     }
 }
 
 #[tokio::test]
-async fn a_live_curve_skips_authority_checks_routes_locally_and_prices_from_the_curve() {
+async fn a_live_curve_passes_without_authority_checks_and_is_priced_from_the_curve() {
     let net = chain(vec![(MINT.to_string(), mint(TOKEN_2022_PROGRAM, true, false, 0)), (curve_key(), live_curve(true))], Duration::ZERO);
     let result = gate(&net, &config(json!({}), 100)).await;
-    assert!(matches!(result.verdict, Verdict::Pass { route: Route::Pump(_), token_program: TOKEN_2022_PROGRAM }), "{result:?}");
+    assert!(matches!(result.verdict, GateVerdict::Pass { token_program: TOKEN_2022_PROGRAM, .. }), "{result:?}");
     // 32 SOL x 1e15 supply / 1e15 virtual tokens = 32 SOL = $4800 at $150; 2 SOL real = $300.
     assert_eq!(result.facts.market_cap_usd, Some(4800.0));
     assert_eq!(result.facts.liquidity_usd, Some(300.0));
 }
 
 #[tokio::test]
-async fn a_curve_quoted_in_another_token_is_not_priced_in_sol() {
+async fn a_live_curve_quoted_in_another_token_is_skipped_as_unsupported() {
     let net = chain(vec![(MINT.to_string(), mint(TOKEN_2022_PROGRAM, false, false, 0)), (curve_key(), live_curve(false))], Duration::ZERO);
-    let result = gate(&net, &config(json!({ "maxMarketCapUsd": 100_000 }), 100)).await;
-    assert_eq!(result.facts.market_cap_usd, None);
-    assert_eq!(code(&result), Some(GateCode::MissingData));
+    let result = gate(&net, &config(json!({}), 100)).await;
+    assert_eq!(code(&result), Some(GateCode::UnsupportedCurve));
 }
 
 #[tokio::test]
-async fn off_the_curve_a_freeze_authority_rejects_the_token() {
-    let net = chain(vec![(MINT.to_string(), mint(TOKEN_PROGRAM, false, true, 0))], Duration::ZERO);
-    assert_eq!(code(&gate(&net, &config(json!({}), 100)).await), Some(GateCode::FreezeAuthority));
+async fn a_coin_off_the_curve_is_unsupported() {
+    let net = chain(vec![(MINT.to_string(), mint(TOKEN_PROGRAM, false, false, 0))], Duration::ZERO);
+    assert_eq!(code(&gate(&net, &config(json!({}), 100)).await), Some(GateCode::UnsupportedCurve));
 }
 
 #[tokio::test]
@@ -129,16 +122,16 @@ async fn a_read_slower_than_the_budget_counts_as_unknown_and_rejects() {
 }
 
 #[tokio::test]
-async fn a_market_cap_filter_with_no_market_data_rejects_unless_the_rule_allows_it() {
-    let net = chain(vec![(MINT.to_string(), mint(TOKEN_PROGRAM, false, false, 0))], Duration::ZERO);
-    assert_eq!(code(&gate(&net, &config(json!({ "maxMarketCapUsd": 100_000 }), 100)).await), Some(GateCode::MissingData));
-    let lenient = gate(&net, &config(json!({ "maxMarketCapUsd": 100_000, "onMissingData": "allow" }), 100)).await;
+async fn an_age_filter_with_no_market_data_rejects_unless_the_rule_allows_it() {
+    let net = chain(vec![(MINT.to_string(), mint(TOKEN_PROGRAM, false, false, 0)), (curve_key(), live_curve(true))], Duration::ZERO);
+    assert_eq!(code(&gate(&net, &config(json!({ "minTokenAgeSec": 60 }), 100)).await), Some(GateCode::MissingData));
+    let lenient = gate(&net, &config(json!({ "minTokenAgeSec": 60, "onMissingData": "allow" }), 100)).await;
     assert_eq!(code(&lenient), None);
 }
 
 #[tokio::test]
 async fn a_two_and_a_half_percent_transfer_fee_fails_the_default_max_pool_tax_of_zero() {
-    let net = chain(vec![(MINT.to_string(), mint(TOKEN_2022_PROGRAM, false, false, 250))], Duration::ZERO);
+    let net = chain(vec![(MINT.to_string(), mint(TOKEN_2022_PROGRAM, false, false, 250)), (curve_key(), live_curve(true))], Duration::ZERO);
     let result = gate(&net, &config(json!({}), 100)).await;
     assert_eq!(code(&result), Some(GateCode::FilterTax));
     assert_eq!(result.facts.tax_pct, Some(2.5));

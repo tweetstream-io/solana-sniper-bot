@@ -8,16 +8,14 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
-use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::execute::trade::Signed;
 use crate::feed::client::backoff_ms;
 use crate::log::log;
-use crate::network::rpc_call;
+use crate::network::{SignatureStatus, fetch_signature_status, rpc_call};
 
 /// How a sender takes `sendTransaction`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,8 +37,6 @@ pub struct SenderTarget {
     pub url: String,
     /// How it takes the transaction.
     pub kind: SenderKind,
-    /// The sender only accepts transactions that pay it a tip (configured `tipAccounts`).
-    pub needs_tip: bool,
 }
 
 /// The outcome of a transaction on chain.
@@ -103,11 +99,11 @@ impl Lander {
     }
 
     /// Sends the transaction to `targets` (picked per transaction by `execute/trade.rs`), rebroadcasts
-    /// it while the block height stays at or below `last_valid_block_height`, and returns once the
-    /// outcome is known or the wait times out.
-    pub async fn land(&self, signed: &Signed, last_valid_block_height: u64, targets: Vec<SenderTarget>) -> Landing {
-        let signature = signed.signature();
-        let base64 = Arc::new(base64::engine::general_purpose::STANDARD.encode(&signed.bytes));
+    /// it while the block height stays at or below `last_valid_block_height` (until the wait times
+    /// out when that is not known), and returns once the outcome is known or the wait times out.
+    pub async fn land(&self, bytes: &[u8], signature: &str, last_valid_block_height: Option<u64>, targets: Vec<SenderTarget>) -> Landing {
+        let signature = signature.to_string();
+        let base64 = Arc::new(base64::engine::general_purpose::STANDARD.encode(bytes));
         let senders = Arc::new(targets);
         let outcome = self.watcher.wait(signature.clone());
         let sent = Instant::now();
@@ -120,7 +116,9 @@ impl Lander {
                 let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
                 loop {
                     ticker.tick().await;
-                    if current_block_height().is_some_and(|height| height > last_valid_block_height) {
+                    if let (Some(height), Some(last_valid)) = (current_block_height(), last_valid_block_height)
+                        && height > last_valid
+                    {
                         return;
                     }
                     drop(tokio::spawn(fan_out(client.clone(), Arc::clone(&senders), Arc::clone(&base64))));
@@ -163,27 +161,10 @@ impl Lander {
         let Some(rpc) = &self.options.status_rpc_url else {
             return fallback;
         };
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Entry {
-            confirmation_status: Option<String>,
-            err: Option<Value>,
-        }
-        #[derive(Deserialize)]
-        struct Reply {
-            value: Vec<Option<Entry>>,
-        }
-        let params = json!([[signature]]);
-        let Ok(reply) = rpc_call::<Reply>(&self.client, rpc, "getSignatureStatuses", params, SEND_TIMEOUT).await else {
-            return fallback;
-        };
-        let Some(Some(entry)) = reply.value.into_iter().next() else {
-            return fallback;
-        };
-        match (entry.confirmation_status.as_deref(), entry.err) {
-            (None | Some("processed"), _) => fallback,
-            (Some(_), Some(err)) if !err.is_null() => Status::Failed(err.to_string()),
-            (Some(_), _) => Status::Confirmed,
+        match fetch_signature_status(&self.client, rpc, signature, false, SEND_TIMEOUT).await {
+            Ok(Some(SignatureStatus { confirmed: true, err: Some(err) })) => Status::Failed(err.to_string()),
+            Ok(Some(SignatureStatus { confirmed: true, err: None })) => Status::Confirmed,
+            Ok(Some(SignatureStatus { confirmed: false, err: _ }) | None) | Err(_) => fallback,
         }
     }
 }

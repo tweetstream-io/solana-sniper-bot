@@ -4,12 +4,11 @@
 //! chain.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use serde::Deserialize;
-use serde_json::Value;
 use solana_pubkey::Pubkey;
 
 use crate::execute::pump::{
@@ -170,6 +169,7 @@ pub struct ScenarioNetwork {
     debits: Mutex<HashMap<String, i128>>,
     balances: Mutex<HashMap<String, u64>>,
     block_height: AtomicU64,
+    blockhash_valid: AtomicBool,
     read_delay: Option<Duration>,
 }
 
@@ -189,6 +189,7 @@ impl ScenarioNetwork {
             debits: Mutex::default(),
             balances: Mutex::default(),
             block_height,
+            blockhash_valid: AtomicBool::new(true),
             read_delay: None,
         }
     }
@@ -217,6 +218,11 @@ impl ScenarioNetwork {
     /// Sets the wallet's balance of a token.
     pub fn set_balance(&self, mint: &str, amount: u64) {
         guard(&self.balances).insert(mint.to_string(), amount);
+    }
+
+    /// Sets what `isBlockhashValid` answers for every blockhash (true until set).
+    pub fn set_blockhash_valid(&self, valid: bool) {
+        self.blockhash_valid.store(valid, Ordering::Relaxed);
     }
 
     /// Moves the chain to a block height.
@@ -253,12 +259,12 @@ impl Network for ScenarioNetwork {
         Ok(guard(&self.statuses).get(signature).cloned())
     }
 
-    async fn transaction_debit(&self, signature: &str, _owner: &str) -> NetResult<Option<i128>> {
-        Ok(guard(&self.debits).get(signature).copied())
+    async fn is_blockhash_valid(&self, _blockhash: &str) -> NetResult<bool> {
+        Ok(self.blockhash_valid.load(Ordering::Relaxed))
     }
 
-    async fn pumpportal_tx(&self, _body: Value) -> NetResult<Vec<u8>> {
-        Err(NetError("the scenario has no PumpPortal".to_string()))
+    async fn transaction_debit(&self, signature: &str, _owner: &str) -> NetResult<Option<i128>> {
+        Ok(guard(&self.debits).get(signature).copied())
     }
 
     async fn jupiter_order(&self, _request: OrderRequest) -> NetResult<JupiterOrder> {

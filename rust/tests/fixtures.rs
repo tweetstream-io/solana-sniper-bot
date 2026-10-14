@@ -5,8 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use solana_sniper_bot::detect::types::Actor;
-use solana_sniper_bot::execute::trades::{Mode, Position, PositionRoute, TradeBook, Trigger};
+use solana_sniper_bot::execute::trades::{Mode, TradeBook};
 use solana_sniper_bot::pipeline::{Decider, decisions_json, signals_json};
 use solana_sniper_bot::protocol::Envelope;
 use solana_sniper_bot::setup::config::parse_config;
@@ -15,36 +14,38 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../shared/fixtures")
 }
 
-fn actor(value: &Value) -> Actor {
-    serde_json::from_value(value.clone()).expect("position actor")
+/// A dry-run state file holding the fixture's positions, opened the way the bot opens one.
+fn book_with(positions: &[Value], dir: &std::path::Path) -> TradeBook {
+    let mut held = serde_json::Map::new();
+    for p in positions {
+        let mut trigger = json!({ "eventRef": "" });
+        if let Some(post) = p.get("postKey") {
+            trigger["postKey"] = post.clone();
+        }
+        let position = json!({
+            "rule": p["rule"], "trigger": trigger, "tokenProgram": "", "openedAt": 0,
+            "costLamports": "0", "tokenAmount": null, "pendingExits": []
+        });
+        held.insert(p["mint"].as_str().expect("position mint").to_string(), position);
+    }
+    let state = json!({
+        "version": 2, "mode": "dry_run", "purchases": {}, "spend": { "totalLamports": "0", "recent": [] },
+        "positions": held, "pending": {}
+    });
+    let path = dir.join("dry-run.json");
+    std::fs::write(&path, state.to_string()).expect("write the fixture state");
+    TradeBook::open(Some(&path), Mode::DryRun).expect("fixture state loads")
 }
 
 fn run_fixture(fixture: &Value) -> (Vec<Value>, Vec<Value>) {
     let config =
         fixture.get("config").cloned().unwrap_or_else(|| json!({ "rules": [{ "name": "none", "mode": "ca_scanner", "accounts": ["1"] }] }));
     let config = Arc::new(parse_config(config).expect("fixture config is valid"));
-    let book = Arc::new(TradeBook::open(None, Mode::DryRun).unwrap());
-    for p in fixture["positions"].as_array().into_iter().flatten() {
-        let trigger = Trigger {
-            rule: p["rule"].as_str().unwrap().to_string(),
-            fire_key: String::new(),
-            event_ref: String::new(),
-            post_key: p["postKey"].as_str().map(str::to_string),
-            actor: actor(&p["actor"]),
-        };
-        book.open_position(Position {
-            mint: p["mint"].as_str().unwrap().to_string(),
-            route: PositionRoute::Pump,
-            token_program: String::new(),
-            opened_at: 0,
-            buy_trade_id: String::new(),
-            cost_lamports: 0,
-            token_amount: None,
-            trigger,
-            sell_trade_id: None,
-        });
-    }
-    let mut decider = Decider::new(Arc::clone(&config), book);
+    let dir = std::env::temp_dir().join(format!("sniper-fixture-{}-{}", std::process::id(), fixture["name"].as_str().unwrap_or("x")));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let positions = fixture["positions"].as_array().cloned().unwrap_or_default();
+    let book = Arc::new(book_with(&positions, &dir));
+    let mut decider = Decider::new(Arc::clone(&config), Arc::clone(&book));
     let (mut signals, mut decisions) = (Vec::new(), Vec::new());
     for event in fixture["events"].as_array().expect("events") {
         let frame = event["envelope"].to_string();
@@ -52,6 +53,11 @@ fn run_fixture(fixture: &Value) -> (Vec<Value>, Vec<Value>) {
         let outcome = decider.handle(&envelope, event["receivedAtMs"].as_i64().expect("receivedAtMs"));
         signals.extend(signals_json(&outcome));
         decisions.extend(decisions_json(&outcome, &config));
+    }
+    book.close();
+    drop(book);
+    if let Err(error) = std::fs::remove_dir_all(&dir) {
+        eprintln!("cannot remove {}: {error}", dir.display());
     }
     (signals, decisions)
 }
@@ -134,4 +140,55 @@ fn every_shared_config_fixture_matches() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn every_shared_ledger_fixture_loads_and_writes_back_unchanged() {
+    let mut files: Vec<PathBuf> =
+        std::fs::read_dir(fixture_dir().join("ledger")).expect("shared/fixtures/ledger exists").map(|e| e.unwrap().path()).collect();
+    files.sort();
+    assert!(!files.is_empty());
+    let dir = std::env::temp_dir().join(format!("sniper-ledger-fixtures-{}", std::process::id()));
+    let mut failures = Vec::new();
+    for file in &files {
+        let original: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        let (name, mode) = match original["mode"].as_str() {
+            Some("live") => ("live.json", Mode::Live),
+            _ => ("dry-run.json", Mode::DryRun),
+        };
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, original.to_string()).unwrap();
+        match TradeBook::open(Some(&path), mode) {
+            Ok(book) => {
+                book.close();
+                let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                if written != original {
+                    failures.push(format!("{}: wrote back\n  {written}\n  expected\n  {original}", file.display()));
+                }
+            }
+            Err(error) => failures.push(format!("{}: {error}", file.display())),
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The shared fixture cannot tell which update fired (both share an event name), so this checks
+/// that the update without `kind` produces nothing on its own.
+#[test]
+fn a_post_assembled_from_updates_waits_for_its_kind() {
+    let config = Arc::new(parse_config(json!({ "rules": [{ "name": "scan", "mode": "ca_scanner", "accounts": ["111"] }] })).unwrap());
+    let mut decider = Decider::new(Arc::clone(&config), Arc::new(TradeBook::open(None, Mode::DryRun).unwrap()));
+    let first = json!({ "v": 1, "t": "tweet", "op": "update", "ts": 1, "id": "u1", "d": {
+        "tweetId": "2026541013136310272", "text": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo", "author": { "id": "111", "handle": "dev_one" }
+    } })
+    .to_string();
+    let outcome = decider.handle(&serde_json::from_str(&first).unwrap(), 1_772_000_003_500);
+    assert!(outcome.signals.is_empty() && outcome.fires.is_empty(), "no kind yet: nothing, got {outcome:?}");
+    let second =
+        json!({ "v": 1, "t": "tweet", "op": "update", "ts": 2, "id": "u2", "d": { "tweetId": "2026541013136310272", "kind": "post" } })
+            .to_string();
+    let outcome = decider.handle(&serde_json::from_str(&second).unwrap(), 1_772_000_003_600);
+    assert_eq!(outcome.fires.len(), 1, "the kind arrived: it fires");
 }

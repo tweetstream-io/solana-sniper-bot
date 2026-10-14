@@ -136,6 +136,8 @@ pub struct Curve {
     pub cashback: bool,
     /// The quote mint is the default key, which means SOL.
     pub sol_paired: bool,
+    /// Account length. Older curves are shorter, and a trade tops their rent up to the full layout.
+    pub data_length: usize,
 }
 
 fn u64_at(data: &[u8], at: usize) -> u64 {
@@ -150,6 +152,7 @@ pub fn parse_curve(data: &[u8]) -> Option<Curve> {
         return None;
     }
     let quote_mint = if data.len() >= 115 { Some(&data[83..115]) } else { None };
+    let sol_paired = quote_mint.is_none_or(|q| q.iter().all(|b| *b == 0));
     Some(Curve {
         virtual_token_reserves: u64_at(data, 8),
         virtual_quote_reserves: u64_at(data, 16),
@@ -159,18 +162,16 @@ pub fn parse_curve(data: &[u8]) -> Option<Curve> {
         complete: data[48] == 1,
         mayhem: data.len() > 81 && data[81] == 1,
         cashback: data.len() > 82 && data[82] == 1,
-        sol_paired: quote_mint.is_none_or(|q| q.iter().all(|b| *b == 0)),
+        sol_paired,
+        data_length: data.len(),
     })
 }
 
-/// Returns why the local builder cannot trade this curve: it handles live, SOL-paired curves, and
+/// Returns why the local builder cannot trade this live curve: it must be quoted in SOL, and
 /// cashback coins reject v3 trades (error 6094).
-pub fn local_build_blocker(curve: &Curve) -> Option<&'static str> {
-    if curve.complete {
-        return Some("bonding curve is complete (graduated)");
-    }
+pub fn unsupported_curve(curve: &Curve) -> Option<&'static str> {
     if !curve.sol_paired {
-        return Some("curve is not SOL-paired");
+        return Some("the curve is quoted in a token other than SOL");
     }
     if curve.cashback {
         return Some("cashback coin: v3 trades are not supported");
@@ -189,10 +190,45 @@ pub struct FeeTier {
     pub creator_bps: u64,
 }
 
+/// pump.fun's fee tiers, never empty, in account order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeeTiers {
+    first: FeeTier,
+    rest: Vec<FeeTier>,
+}
+
+impl FeeTiers {
+    /// Returns the tiers, or `None` for an empty list.
+    pub fn new(mut tiers: Vec<FeeTier>) -> Option<FeeTiers> {
+        if tiers.is_empty() {
+            return None;
+        }
+        let first = tiers.remove(0);
+        Some(FeeTiers { first, rest: tiers })
+    }
+
+    /// Returns the tier at `index` in account order.
+    pub fn get(&self, index: usize) -> Option<&FeeTier> {
+        if index == 0 { Some(&self.first) } else { self.rest.get(index - 1) }
+    }
+
+    /// Returns one tier that charges the highest fee at every market cap. Quotes made with it come
+    /// out lower, so a minimum-out never assumes a fee cut that may have ended.
+    pub fn strictest(&self) -> FeeTiers {
+        let mut highest = self.first;
+        for tier in &self.rest {
+            if tier.protocol_bps + tier.creator_bps > highest.protocol_bps + highest.creator_bps {
+                highest = *tier;
+            }
+        }
+        FeeTiers { first: FeeTier { threshold: 0, ..highest }, rest: Vec::new() }
+    }
+}
+
 /// Parses the `FeeConfig` account (`idl/pump.json`): discriminator, bump u8, admin pubkey, flat fees
 /// (3 x u64), then `fee_tiers`: a u32 count and, per tier, a u128 market-cap threshold in lamports
 /// and lp, protocol, and creator fees in basis points (3 x u64).
-pub fn parse_fee_config(data: &[u8]) -> Option<Vec<FeeTier>> {
+pub fn parse_fee_config(data: &[u8]) -> Option<FeeTiers> {
     if data.len() < 69 || data[..8] != FEE_CONFIG_ACCOUNT {
         return None;
     }
@@ -206,21 +242,18 @@ pub fn parse_fee_config(data: &[u8]) -> Option<Vec<FeeTier>> {
         let threshold = u128::from(u64_at(data, at)) | (u128::from(u64_at(data, at + 8)) << 64);
         tiers.push(FeeTier { threshold, protocol_bps: u64_at(data, at + 24), creator_bps: u64_at(data, at + 32) });
     }
-    Some(tiers)
+    FeeTiers::new(tiers)
 }
 
 /// Returns the protocol plus creator fee for a curve, chosen by market cap in lamports (virtual SOL
 /// x supply / virtual tokens), as `calculateFeeTier` in `FEE_PROGRAM_README.md` does.
-///
-/// # Panics
-///
-/// Panics when `tiers` is empty; [`parse_fee_config`] never returns an empty list.
-pub fn curve_fee_bps(tiers: &[FeeTier], curve: &Curve) -> u64 {
+pub fn curve_fee_bps(tiers: &FeeTiers, curve: &Curve) -> u64 {
     let cap =
         u128::from(curve.virtual_quote_reserves) * u128::from(curve.token_total_supply) / u128::from(curve.virtual_token_reserves.max(1));
-    let mut tier = &tiers[0];
+    let (first, rest) = (&tiers.first, &tiers.rest);
+    let mut tier = first;
     if cap >= tier.threshold {
-        for candidate in tiers.iter().rev() {
+        for candidate in rest.iter().rev().chain(std::iter::once(first)) {
             if cap >= candidate.threshold {
                 tier = candidate;
                 break;
@@ -238,7 +271,8 @@ pub fn curve_fee_bps(tiers: &[FeeTier], curve: &Curve) -> u64 {
 /// ```
 /// use solana_sniper_bot::execute::pump::{Curve, tokens_for_lamports};
 /// let curve = Curve { virtual_token_reserves: 1_000_000_000_000_000, virtual_quote_reserves: 32_000_000_000, real_token_reserves: 0,
-///     real_quote_reserves: 0, token_total_supply: 0, complete: false, mayhem: false, cashback: false, sol_paired: true };
+///     real_quote_reserves: 0, token_total_supply: 0, complete: false, mayhem: false, cashback: false, sol_paired: true,
+///     data_length: 115 };
 /// assert_eq!(tokens_for_lamports(&curve, 10_000_000, 125), 308_546_738_277);
 /// ```
 pub fn tokens_for_lamports(curve: &Curve, lamports: u64, fee_bps: u64) -> u64 {

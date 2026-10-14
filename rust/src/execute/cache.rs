@@ -3,26 +3,32 @@
 //! and pump.fun's fee tiers. Read by `execute/trade.rs`, `filters/gate.rs`, and `land/land.rs`.
 
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
-use crate::execute::pump::{FeeTier, fee_config, parse_fee_config};
+use crate::execute::pump::{FeeTiers, fee_config, parse_fee_config};
 use crate::log::log;
 use crate::network::{Blockhash, EpochInfo, NetResult, Network};
 
-/// A blockhash older than this is not used: the cache has stopped refreshing, and a transaction
-/// built on it may already be close to expiry.
-const MAX_BLOCKHASH_AGE: Duration = Duration::from_secs(10);
+/// A blockhash older than this is not used: the refresh has stopped, and a transaction built on it
+/// may already be close to expiry.
+const BLOCKHASH_MAX_AGE: Duration = Duration::from_secs(10);
+/// An epoch reading older than this is not used; the gate then charges the higher of a mint's two
+/// transfer fees.
+const EPOCH_MAX_AGE: Duration = Duration::from_secs(60);
+/// Fee tiers older than this are replaced by their strictest tier.
+const FEE_TIERS_MAX_AGE: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Default)]
 struct Values {
     blockhash: Option<(Blockhash, Instant)>,
-    height: Option<EpochInfo>,
+    height: Option<(EpochInfo, Instant)>,
     priority_micro_lamports: Option<u64>,
     tip_floor_sol: Option<f64>,
     sol_usd: Option<f64>,
-    fee_tiers: Option<Vec<FeeTier>>,
+    fee_tiers: Option<(FeeTiers, Instant)>,
 }
 
 /// The latest background values, readable from any task.
@@ -40,17 +46,19 @@ impl ChainCache {
     pub fn fresh_blockhash(&self) -> Option<Blockhash> {
         let values = self.values();
         let (blockhash, fetched) = values.blockhash.as_ref()?;
-        (fetched.elapsed() <= MAX_BLOCKHASH_AGE).then(|| blockhash.clone())
+        (fetched.elapsed() <= BLOCKHASH_MAX_AGE).then(|| blockhash.clone())
     }
 
-    /// Returns the current block height.
+    /// Returns the latest block height read.
     pub fn block_height(&self) -> Option<u64> {
-        self.values().height.map(|h| h.block_height)
+        self.values().height.map(|(h, _)| h.block_height)
     }
 
-    /// Returns the current epoch.
+    /// Returns the current epoch while the reading is at most 60 seconds old.
     pub fn epoch(&self) -> Option<u64> {
-        self.values().height.map(|h| h.epoch)
+        let values = self.values();
+        let (info, read) = values.height.as_ref()?;
+        (read.elapsed() <= EPOCH_MAX_AGE).then_some(info.epoch)
     }
 
     /// Returns the 75th percentile of recent nonzero priority fees, per compute unit.
@@ -68,9 +76,12 @@ impl ChainCache {
         self.values().sol_usd
     }
 
-    /// Returns pump.fun's fee tiers.
-    pub fn fee_tiers(&self) -> Option<Vec<FeeTier>> {
-        self.values().fee_tiers.clone()
+    /// Returns pump.fun's fee tiers. Once older than 5 minutes, the single tier with the highest
+    /// fee stands in for all of them.
+    pub fn fee_tiers(&self) -> Option<FeeTiers> {
+        let values = self.values();
+        let (tiers, read) = values.fee_tiers.as_ref()?;
+        Some(if read.elapsed() <= FEE_TIERS_MAX_AGE { tiers.clone() } else { tiers.strictest() })
     }
 
     /// Waits until the blockhash and the block height have had a chance to load (at most 5 s), so a
@@ -96,7 +107,7 @@ impl ChainCache {
                     let (hash, info) = tokio::join!(net.latest_blockhash(), net.epoch_info());
                     let mut values = cache.values();
                     values.blockhash = Some((hash?, Instant::now()));
-                    values.height = Some(info?);
+                    values.height = Some((info?, Instant::now()));
                     Ok(())
                 })
             }),
@@ -133,7 +144,9 @@ impl ChainCache {
                 Box::pin(async move {
                     let accounts = net.get_accounts(&[fee_config().to_string()]).await?;
                     let tiers = accounts.into_iter().next().flatten().and_then(|a| parse_fee_config(&a.data));
-                    cache.values().fee_tiers = tiers;
+                    if let Some(tiers) = tiers {
+                        cache.values().fee_tiers = Some((tiers, Instant::now()));
+                    }
                     Ok(())
                 })
             }),

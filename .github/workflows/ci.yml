@@ -42,4 +42,14 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
-      - run: cargo run --release -- --demo
+      - run: cargo build --release
+      # Both demos replay the same feed, so their decisions must match line for line. Timestamps,
+      # timing lines, and the post ids the feed derives from the clock are left out.
+      - name: Compare demo decisions with the TypeScript bot
+        working-directory: .
+        run: |
+          decisions() { grep -E '^[0-9:.]+ (signal|fire|skip|exit) ' | sed -E 's/^[0-9:.]+ //; s/twitter:[0-9]+/twitter:ID/g'; }
+          (cd ts && npm run --silent demo) 2>&1 | decisions > ts-decisions.txt
+          rust/target/release/solana-sniper-bot --demo 2>&1 | decisions > rust-decisions.txt
+          test -s ts-decisions.txt
+          diff ts-decisions.txt rust-decisions.txt

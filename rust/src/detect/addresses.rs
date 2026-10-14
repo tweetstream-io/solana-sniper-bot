@@ -160,7 +160,10 @@ pub fn classify_address(candidate: &str) -> Option<(Chain, String)> {
 /// assert!(!is_solana_address("4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofL"));
 /// ```
 pub fn is_solana_address(candidate: &str) -> bool {
-    matches!(classify_address(candidate), Some((Chain::Solana, _)))
+    match classify_address(candidate) {
+        Some((Chain::Solana, _)) => true,
+        Some((Chain::Evm, _)) | None => false,
+    }
 }
 
 /// A candidate glued to more letters or digits is a slice of something longer (a signature, a

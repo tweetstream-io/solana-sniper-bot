@@ -2098,6 +2098,7 @@ dependencies = [
  "dotenvy",
  "futures-util",
  "jsonschema",
+ "libc",
  "rand 0.10.3",
  "regex",
  "reqwest",

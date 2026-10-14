@@ -87,19 +87,6 @@ pub enum PostKind {
     Other,
 }
 
-impl PostKind {
-    /// Returns the protocol name of the kind.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            PostKind::Post => "post",
-            PostKind::Quote => "quote",
-            PostKind::Reply => "reply",
-            PostKind::Retweet => "retweet",
-            PostKind::Other => "other",
-        }
-    }
-}
-
 /// `tweet/content` and `tweet/update`. An update carries only the fields that changed;
 /// `textUpdateType: "completion"` brings the full text of a post that first arrived shortened.
 #[derive(Debug, Clone, Deserialize)]
@@ -452,4 +439,129 @@ pub fn snowflake_ms(tweet_id: &str) -> Option<i64> {
 pub fn published_at_ms(platform: &str, tweet_id: &str, created_at: Option<f64>) -> Option<i64> {
     let from_id = if platform == "twitter" { snowflake_ms(tweet_id) } else { None };
     from_id.or(created_at.map(|ms| ms as i64))
+}
+
+/// A payload routed by its `t` and `op`.
+#[derive(Debug)]
+pub enum Payload {
+    /// `tweet/content`.
+    Content(TweetPost),
+    /// `tweet/update`.
+    Update(TweetPost),
+    /// `tweet/meta`.
+    Meta(TweetMeta),
+    /// `tweet/pin`.
+    Pin(TweetPin),
+    /// `tweet/delete`.
+    Delete(TweetDelete),
+    /// `account/follow`.
+    Follow(AccountFollow),
+    /// `account/unfollow`.
+    Unfollow(AccountFollow),
+    /// `account/profile_update`.
+    Profile(AccountProfileUpdate),
+    /// `account/callout`.
+    Callout(AccountCallout),
+    /// `account/callout_update`.
+    CalloutUpdate(AccountCallout),
+    /// `account/thesis`.
+    Thesis(AccountThesis),
+    /// `account/token_verified`.
+    Verified(AccountTokenVerified),
+}
+
+fn parse<T: serde::de::DeserializeOwned>(envelope: &Envelope) -> Result<T, String> {
+    let text = envelope.d.map_or("{}", |d| d.get());
+    serde_json::from_str(text).map_err(|e| e.to_string())
+}
+
+/// Parses the payload of a pair this bot reads and checks the fields it needs. Returns `None` for
+/// any other pair, and `Some(Err)` with the reason for a payload that does not match the protocol.
+pub fn decode(envelope: &Envelope) -> Option<Result<Payload, String>> {
+    let decoded = match (envelope.t.as_ref(), envelope.op.as_ref()) {
+        ("tweet", "content") => parse(envelope).map(Payload::Content),
+        ("tweet", "update") => parse(envelope).map(Payload::Update),
+        ("tweet", "meta") => parse(envelope).map(Payload::Meta),
+        ("tweet", "pin") => parse(envelope).map(Payload::Pin),
+        ("tweet", "delete") => parse(envelope).map(Payload::Delete),
+        ("account", "follow") => parse(envelope).map(Payload::Follow),
+        ("account", "unfollow") => parse(envelope).map(Payload::Unfollow),
+        ("account", "profile_update") => parse(envelope).map(Payload::Profile),
+        ("account", "callout") => parse(envelope).map(Payload::Callout),
+        ("account", "callout_update") => parse(envelope).map(Payload::CalloutUpdate),
+        ("account", "thesis") => parse(envelope).map(Payload::Thesis),
+        ("account", "token_verified") => parse(envelope).map(Payload::Verified),
+        _ => return None,
+    };
+    Some(decoded.and_then(|payload| payload_problem(&payload).map_or(Ok(payload), Err)))
+}
+
+/// Returns the first field the detectors read that is missing or empty. `tweet/content` must carry
+/// the whole post: text, author, and a known kind.
+fn payload_problem(payload: &Payload) -> Option<String> {
+    let text = |value: Option<&String>| value.is_some_and(|v| !v.is_empty());
+    let need = |ok: bool, what: &str| if ok { None } else { Some(format!("missing or invalid {what}")) };
+    match payload {
+        Payload::Content(d) => need(!d.tweet_id.is_empty(), "tweetId")
+            .or_else(|| need(d.text.is_some(), "text"))
+            .or_else(|| need(d.author.is_some(), "author"))
+            .or_else(|| need(d.kind.is_some_and(|k| k != PostKind::Other), "kind")),
+        Payload::Update(d) => need(!d.tweet_id.is_empty(), "tweetId").or_else(|| need(d.kind != Some(PostKind::Other), "kind")),
+        Payload::Meta(d) => need(!d.tweet_id.is_empty(), "tweetId"),
+        Payload::Delete(d) => need(!d.tweet_id.is_empty(), "tweetId"),
+        Payload::Pin(d) => need(!d.tweet_id.is_empty(), "tweetId")
+            .or_else(|| need(d.author.is_some(), "author"))
+            .or_else(|| need(text(d.event_id.as_ref()), "eventId")),
+        Payload::Follow(d) | Payload::Unfollow(d) => {
+            need(text(d.target.handle.as_ref()), "target.handle").or_else(|| need(text(d.event_id.as_ref()), "eventId"))
+        }
+        Payload::Profile(d) => need(text(d.event_id.as_ref()), "eventId"),
+        Payload::Callout(d) | Payload::CalloutUpdate(d) => need(!d.caller.username.is_empty(), "caller.username")
+            .or_else(|| need(!d.token.address.is_empty(), "token.address"))
+            .or_else(|| need(text(d.callout_id.as_ref()), "calloutId")),
+        Payload::Thesis(d) => need(!d.coin.address.is_empty(), "coin.address")
+            .or_else(|| need(!d.author.id.is_empty() && !d.author.username.is_empty(), "author"))
+            .or_else(|| need(text(d.thesis.id.as_ref()), "thesis")),
+        Payload::Verified(d) => need(!d.coin.address.is_empty(), "coin.address"),
+    }
+}
+
+/// The name of an event and the identities dedupe compares.
+#[derive(Debug, Clone, Default)]
+pub struct EventKeys {
+    /// `"<t>/<op> <key>"`, used in logs, the latency report, and `shared/fixtures`.
+    pub event_ref: String,
+    /// The payload's `eventId`.
+    pub event_id: Option<String>,
+    /// The post key of a `tweet/*` event.
+    pub post_key: Option<String>,
+    /// An id the payload type carries: `<calloutId>:<kind>:<replyId>`, a thesis id, a coin.
+    pub payload_id: Option<String>,
+}
+
+/// Returns the event reference and identities of a payload. Posts are named by post key; other
+/// events by `d.eventId`, else the envelope id, else an id from the payload.
+pub fn event_ref(pair: &str, envelope_id: Option<&str>, payload: &Payload) -> EventKeys {
+    let (event_id, post, payload_id) = match payload {
+        Payload::Content(d) | Payload::Update(d) => (None, Some(post_key(&d.tweet_id, d.platform.as_deref(), d.author.as_ref())), None),
+        Payload::Meta(d) => (None, Some(post_key(&d.tweet_id, d.platform.as_deref(), None)), None),
+        Payload::Pin(d) => (d.event_id.clone(), Some(post_key(&d.tweet_id, d.platform.as_deref(), d.author.as_ref())), None),
+        Payload::Delete(d) => (d.event_id.clone(), Some(post_key(&d.tweet_id, d.platform.as_deref(), d.author.as_ref())), None),
+        Payload::Follow(d) | Payload::Unfollow(d) => (d.event_id.clone(), None, None),
+        Payload::Profile(d) => (d.event_id.clone(), None, None),
+        Payload::Callout(d) | Payload::CalloutUpdate(d) => {
+            let call = d
+                .callout_id
+                .as_ref()
+                .map(|id| format!("{id}:{}:{}", d.kind.as_deref().unwrap_or("callout"), d.reply_id.as_deref().unwrap_or("")));
+            (d.event_id.clone(), None, call)
+        }
+        Payload::Thesis(d) => (d.event_id.clone(), None, d.thesis.id.clone()),
+        Payload::Verified(d) => (d.event_id.clone(), None, Some(d.coin.address.clone())),
+    };
+    let name = match &post {
+        Some(key) => key.clone(),
+        None => event_id.clone().or(envelope_id.map(str::to_string)).or(payload_id.clone()).unwrap_or_default(),
+    };
+    EventKeys { event_ref: format!("{pair} {name}"), event_id, post_key: post, payload_id }
 }

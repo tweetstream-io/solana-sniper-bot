@@ -39,8 +39,8 @@ async fn land_once(err: Value) -> (Signed, solana_sniper_bot::land::land::Landin
     let (up, up_bodies) = rpc_server(200).await;
     let (watcher, _task) = SignatureWatcher::start(pubsub(err).await);
     let targets = vec![
-        SenderTarget { name: "down".to_string(), url: down, kind: SenderKind::Rpc, needs_tip: false },
-        SenderTarget { name: "up".to_string(), url: up, kind: SenderKind::Rpc, needs_tip: false },
+        SenderTarget { name: "down".to_string(), url: down, kind: SenderKind::Rpc },
+        SenderTarget { name: "up".to_string(), url: up, kind: SenderKind::Rpc },
     ];
     let options = LanderOptions {
         rebroadcast: Duration::from_secs(10),
@@ -50,7 +50,7 @@ async fn land_once(err: Value) -> (Signed, solana_sniper_bot::land::land::Landin
     };
     let lander = Lander::new(http_client(), watcher, options);
     let signed = signed_transfer();
-    let landing = lander.land(&signed, 1_000, targets).await;
+    let landing = lander.land(&signed.bytes, &signed.signature().unwrap(), Some(1_000), targets).await;
     (signed, landing, down_bodies, up_bodies)
 }
 
@@ -59,7 +59,7 @@ async fn the_same_bytes_go_to_every_sender_the_first_to_accept_is_recorded_and_c
     let (signed, landing, down, up) = land_once(Value::Null).await;
     assert_eq!(landing.status, Status::Confirmed);
     assert_eq!(landing.first_ack_by.as_deref(), Some("up"));
-    assert_eq!(landing.signature, signed.signature());
+    assert_eq!(Some(landing.signature), signed.signature());
     let wire = base64::engine::general_purpose::STANDARD.encode(&signed.bytes);
     for bodies in [down, up] {
         let bodies = bodies.lock().unwrap();

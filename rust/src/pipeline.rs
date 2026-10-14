@@ -1,38 +1,39 @@
 //! The whole path of one event, in order: feed, dedupe, store and detect, rule match, filters,
 //! build and sign, land, report. [`Decider`] is the synchronous part (no I/O) that the shared
 //! fixtures test; [`start_bot`] wires it to the feeds and the executor.
+//!
+//! Reading order: `setup/env.rs`, `setup/config.rs`, `feed/client.rs`, `feed/dedupe.rs`, this file,
+//! `detect/store.rs`, `detect/post.rs` and `detect/account.rs`, `rules/index.rs`, `rules/modes.rs`,
+//! `rules/engine.rs`, `execute/trade.rs` (with `filters/gate.rs`, `execute/pump.rs`, and
+//! `execute/trades.rs`), `land/land.rs`, `exits/exits.rs`, `report/latency.rs`.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use solana_keypair::Keypair;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::detect::account::{callout_activity, follow_activity, fomo_activity, pin_activity, profile_activity};
-use crate::detect::post::{SignalContext, detect_meta_signals, detect_post_signals, post_activity, x_actor};
+use crate::detect::post::{SignalContext, detect_meta_signals, detect_post_signals, effective_platform, post_activity, x_actor};
 use crate::detect::store::{Post, PostStore};
 use crate::detect::types::{Activity, ActivityKind, CalloutOp, FollowOp, Signal};
 use crate::execute::cache::ChainCache;
-use crate::execute::trade::{ReleaseFire, SellResult, Trader, TraderDeps};
-use crate::execute::trades::TradeBook;
+use crate::execute::trade::{ReleaseFire, Trader, TraderDeps};
+use crate::execute::trades::{ExitReason, PendingExit, TradeBook};
 use crate::exits::exits::ExitWatcher;
 use crate::feed::client::{FeedOptions, Receipt, spawn_feed};
 use crate::feed::dedupe::{EventDedupe, EventIds, dedupe_key};
 use crate::land::land::{Lander, LanderOptions, SenderKind, SenderTarget, SignatureWatcher};
-use crate::log::{log, short};
+use crate::log::{log, short, wire_name};
 use crate::network::Network;
 use crate::network::http_client;
-use crate::protocol::{
-    AccountCallout, AccountFollow, AccountProfileUpdate, AccountThesis, AccountTokenVerified, Envelope, TweetDelete, TweetMeta, TweetPin,
-    TweetPost, post_key, published_at_ms,
-};
+use crate::protocol::{Envelope, Payload, TweetPost, decode, event_ref, post_key, published_at_ms};
 use crate::report::latency::{LatencyReport, Trace};
 use crate::rules::engine::{EvalContext, RuleEngine};
-use crate::rules::modes::{ExitCode, Fire, Skip};
-use crate::setup::config::{Action, Config};
+use crate::rules::modes::{Fire, Skip};
+use crate::setup::config::Config;
 
 /// An exit the event asks for.
 #[derive(Debug, Clone)]
@@ -40,11 +41,7 @@ pub struct PlannedExit {
     /// The mint to sell.
     pub mint: String,
     /// Why.
-    pub code: ExitCode,
-    /// Index of the rule that asked, or `None` for a deleted post.
-    pub rule: Option<usize>,
-    /// Free text for logs.
-    pub detail: String,
+    pub code: ExitReason,
 }
 
 /// What the decider made of one event.
@@ -93,24 +90,15 @@ pub fn decisions_json(outcome: &Outcome, config: &Config) -> Vec<Value> {
     for fire in &outcome.fires {
         let rule = &config.rules[fire.rule];
         let source = fire.signal.as_ref().map(|s| s.source);
-        out.push(json!({ "event": event, "rule": rule.name, "decision": "fire", "mint": fire.mint, "action": rule.token.action.as_str(), "source": source }));
+        out.push(json!({ "event": event, "rule": rule.name, "decision": "fire", "mint": fire.mint, "source": source }));
     }
     for skip in &outcome.skips {
         out.push(json!({ "event": event, "rule": config.rules[skip.rule].name, "decision": "skip", "code": skip.code }));
     }
     for exit in &outcome.exits {
-        let mut value = json!({ "event": event, "decision": "exit", "mint": exit.mint, "code": exit.code });
-        if let Some(rule) = exit.rule {
-            value["rule"] = json!(config.rules[rule].name);
-        }
-        out.push(value);
+        out.push(json!({ "event": event, "decision": "exit", "mint": exit.mint, "code": exit.code }));
     }
     out
-}
-
-fn parse<T: DeserializeOwned>(envelope: &Envelope) -> Result<T, String> {
-    let text = envelope.d.map_or("{}", |d| d.get());
-    serde_json::from_str(text).map_err(|e| e.to_string())
 }
 
 /// Synchronous: from receipt to "these rules fire" with no await, so nothing else can interleave
@@ -123,54 +111,33 @@ pub struct Decider {
     engine: RuleEngine,
 }
 
-/// A routed payload, with the identities dedupe needs.
-enum Payload {
-    Post(TweetPost),
-    Meta(TweetMeta),
-    Pin(TweetPin),
-    Delete(TweetDelete),
-    Follow(AccountFollow, FollowOp),
-    Profile(AccountProfileUpdate),
-    Callout(AccountCallout, CalloutOp),
-    Thesis(AccountThesis),
-    Verified(AccountTokenVerified),
-}
-
 impl Decider {
     /// Creates a decider over the config and the shared trade book.
     pub fn new(config: Arc<Config>, book: Arc<TradeBook>) -> Decider {
-        let engine = RuleEngine::new(Arc::clone(&config), Arc::clone(&book));
+        let engine = RuleEngine::new(Arc::clone(&config), &book);
         Decider { config, book, dedupe: EventDedupe::default(), store: PostStore::default(), engine }
     }
 
     /// Routes one event and returns the signals and decisions it produced. `wall_ms` is the
     /// receipt time used for post age and cooldowns.
     pub fn handle(&mut self, envelope: &Envelope, wall_ms: i64) -> Outcome {
-        let (t, op) = (envelope.t.as_ref(), envelope.op.as_ref());
-        let routed = match (t, op) {
-            ("tweet", "content") => parse(envelope).and_then(|d| content_problem(&d).map_or(Ok(Payload::Post(d)), Err)),
-            ("tweet", "update") => parse(envelope).map(Payload::Post),
-            ("tweet", "meta") => parse(envelope).map(Payload::Meta),
-            ("tweet", "pin") => parse(envelope).map(Payload::Pin),
-            ("tweet", "delete") => parse(envelope).map(Payload::Delete),
-            ("account", "follow") => parse(envelope).map(|d| Payload::Follow(d, FollowOp::Follow)),
-            ("account", "unfollow") => parse(envelope).map(|d| Payload::Follow(d, FollowOp::Unfollow)),
-            ("account", "profile_update") => parse(envelope).map(Payload::Profile),
-            ("account", "callout") => parse(envelope).map(|d| Payload::Callout(d, CalloutOp::Call)),
-            ("account", "callout_update") => parse(envelope).map(|d| Payload::Callout(d, CalloutOp::Update)),
-            ("account", "thesis") => parse(envelope).map(Payload::Thesis),
-            ("account", "token_verified") => parse(envelope).map(Payload::Verified),
-            _ => return Outcome { event_ref: format!("{t}/{op}"), ..Outcome::default() },
+        let pair = format!("{}/{}", envelope.t, envelope.op);
+        let payload = match decode(envelope) {
+            None => return Outcome { event_ref: pair, ..Outcome::default() },
+            Some(Err(error)) => return Outcome { event_ref: pair, malformed: Some(error), ..Outcome::default() },
+            Some(Ok(payload)) => payload,
         };
-        let payload = match routed.and_then(|payload| problem(&payload).map_or(Ok(payload), Err)) {
-            Ok(payload) => payload,
-            Err(error) => return Outcome { event_ref: format!("{t}/{op}"), malformed: Some(error), ..Outcome::default() },
-        };
-        let pair = format!("{t}/{op}");
         let envelope_id = envelope.id.as_deref();
-        let (event_ref, ids) = identify(&pair, envelope_id, &payload);
-        let mut outcome = Outcome { event_ref, ..Outcome::default() };
-        if !self.dedupe.first(dedupe_key(&pair, ids.as_ids(envelope_id))) {
+        let keys = event_ref(&pair, envelope_id, &payload);
+        let ids = EventIds {
+            envelope: envelope_id,
+            event: keys.event_id.as_deref(),
+            post: keys.post_key.as_deref(),
+            payload: keys.payload_id.as_deref(),
+        };
+        let first = self.dedupe.first(dedupe_key(&pair, ids));
+        let mut outcome = Outcome { event_ref: keys.event_ref, ..Outcome::default() };
+        if !first {
             outcome.duplicate = true;
             return outcome;
         }
@@ -189,11 +156,6 @@ impl Decider {
         outcome.signals = activity.signals;
         outcome.fires = evaluation.fires;
         outcome.skips = evaluation.skips;
-        for exit in evaluation.exits {
-            if self.book.exit_targets_for_actor(&self.config.rules[exit.rule].name, &exit.actor).contains(&exit.mint) {
-                outcome.exits.push(PlannedExit { mint: exit.mint, code: exit.code, rule: Some(exit.rule), detail: exit.detail });
-            }
-        }
         outcome
     }
 
@@ -207,21 +169,8 @@ impl Decider {
     fn apply(&mut self, payload: Payload, outcome: &mut Outcome) -> Option<Activity> {
         let event_ref = outcome.event_ref.clone();
         match payload {
-            Payload::Post(d) => {
-                let content = event_ref.starts_with("tweet/content ");
-                let key = post_key(&d.tweet_id, d.platform.as_deref(), d.author.as_ref());
-                let platform = platform_of(&key);
-                let had_content = self.store.get(&key).and_then(|e| e.post.as_ref()).is_some_and(|p| p.text.is_some());
-                if content {
-                    self.store.apply_content(&key, &platform, d);
-                } else {
-                    self.store.apply_update(&key, d);
-                }
-                let activity = self.post_activity(&key, &platform, &event_ref)?;
-                outcome.published_at = self.published_at(&key);
-                outcome.first_content = content && !had_content;
-                Some(activity)
-            }
+            Payload::Content(d) => self.apply_post(d, true, &event_ref, outcome),
+            Payload::Update(d) => self.apply_post(d, false, &event_ref, outcome),
             Payload::Meta(d) => {
                 let key = post_key(&d.tweet_id, d.platform.as_deref(), None);
                 let platform = platform_of(&key);
@@ -232,29 +181,48 @@ impl Decider {
             }
             Payload::Pin(d) => {
                 let key = post_key(&d.tweet_id, d.platform.as_deref(), d.author.as_ref());
-                Some(pin_activity(&d, &key, &platform_of(&key), &event_ref))
+                let platform = d.platform.as_deref().unwrap_or("twitter");
+                Some(pin_activity(&d, &key, platform, &event_ref))
             }
             Payload::Delete(d) => {
                 if self.config.exits.sell_on_delete {
                     let key = post_key(&d.tweet_id, d.platform.as_deref(), d.author.as_ref());
                     for mint in self.book.exit_targets_for_post(&key) {
-                        let detail = "the post that triggered the buy was deleted".to_string();
-                        outcome.exits.push(PlannedExit { mint, code: ExitCode::PostDeleted, rule: None, detail });
+                        outcome.exits.push(PlannedExit { mint, code: ExitReason::PostDeleted });
                     }
                 }
                 None
             }
-            Payload::Follow(d, op) => Some(follow_activity(&d, op, account_platform(d.actor.platform.as_deref()), &event_ref)),
+            Payload::Follow(d) => Some(follow_activity(&d, FollowOp::Follow, "twitter", &event_ref)),
+            Payload::Unfollow(d) => Some(follow_activity(&d, FollowOp::Unfollow, "twitter", &event_ref)),
             Payload::Profile(d) => {
-                let platform = account_platform(d.actor.platform.as_deref());
+                let platform = effective_platform(Some(&d.actor), "twitter");
                 let activity = profile_activity(&d, self.store.profile(platform, d.actor.id.as_deref()), platform, &event_ref);
                 self.store.update_profile(platform, d.actor.id.as_deref(), &d.changes);
                 Some(activity)
             }
-            Payload::Callout(d, op) => Some(callout_activity(&d, op, &event_ref)),
+            Payload::Callout(d) => Some(callout_activity(&d, CalloutOp::Call, &event_ref)),
+            Payload::CalloutUpdate(d) => Some(callout_activity(&d, CalloutOp::Update, &event_ref)),
             Payload::Thesis(d) => Some(fomo_activity(&d.coin, Some(&d), &event_ref)),
             Payload::Verified(d) => Some(fomo_activity(&d.coin, None, &event_ref)),
         }
+    }
+
+    /// `tweet/content` replaces the post's fields under any earlier update; `tweet/update` patches
+    /// the fields it carries.
+    fn apply_post(&mut self, d: TweetPost, content: bool, event_ref: &str, outcome: &mut Outcome) -> Option<Activity> {
+        let key = post_key(&d.tweet_id, d.platform.as_deref(), d.author.as_ref());
+        let platform = effective_platform(d.author.as_ref(), &platform_of(&key)).to_string();
+        let had_content = self.store.get(&key).and_then(|e| e.post.as_ref()).is_some_and(|p| p.text.is_some());
+        if content {
+            self.store.apply_content(&key, &platform, d);
+        } else {
+            self.store.apply_update(&key, d);
+        }
+        let activity = self.post_activity(&key, &platform, event_ref)?;
+        outcome.published_at = self.published_at(&key);
+        outcome.first_content = content && !had_content;
+        Some(activity)
     }
 
     /// Returns the activity of a stored post, once it has an author, with every signal of the
@@ -265,6 +233,7 @@ impl Decider {
         if post.author.id.is_none() && post.author.handle.is_none() {
             return None;
         }
+        let platform = effective_platform(Some(&post.author), platform);
         let actor = x_actor(Some(&post.author), platform);
         let ctx = SignalContext { actor: &actor, event_ref, post_key: Some(key), market_cap_usd: None };
         let mut signals = detect_post_signals(post, &ctx);
@@ -275,7 +244,7 @@ impl Decider {
                 }
             }
         }
-        let activity = post_activity(post, key, platform);
+        let activity = post_activity(post, key, platform)?;
         Some(Activity { actor, event_ref: event_ref.to_string(), signals, kind: ActivityKind::Post(activity) })
     }
 
@@ -285,87 +254,8 @@ impl Decider {
     }
 }
 
-/// Checks the fields the protocol marks required for each operation, so a malformed frame is
-/// skipped with a reason instead of acting on half an event.
-fn problem(payload: &Payload) -> Option<String> {
-    let text = |value: Option<&String>| value.is_some_and(|v| !v.is_empty());
-    let need = |ok: bool, what: &str| if ok { None } else { Some(format!("missing or invalid {what}")) };
-    match payload {
-        Payload::Post(d) => need(!d.tweet_id.is_empty(), "tweetId"),
-        Payload::Meta(d) => need(!d.tweet_id.is_empty(), "tweetId"),
-        Payload::Delete(d) => need(!d.tweet_id.is_empty(), "tweetId"),
-        Payload::Pin(d) => need(!d.tweet_id.is_empty(), "tweetId")
-            .or_else(|| need(d.author.is_some(), "author"))
-            .or_else(|| need(text(d.event_id.as_ref()), "eventId")),
-        Payload::Follow(d, _) => {
-            need(text(d.target.handle.as_ref()), "target.handle").or_else(|| need(text(d.event_id.as_ref()), "eventId"))
-        }
-        Payload::Profile(d) => need(text(d.event_id.as_ref()), "eventId"),
-        Payload::Callout(d, _) => need(!d.caller.username.is_empty(), "caller.username")
-            .or_else(|| need(!d.token.address.is_empty(), "token.address"))
-            .or_else(|| need(text(d.callout_id.as_ref()), "calloutId")),
-        Payload::Thesis(d) => need(!d.coin.address.is_empty(), "coin.address")
-            .or_else(|| need(!d.author.id.is_empty() && !d.author.username.is_empty(), "author"))
-            .or_else(|| need(text(d.thesis.id.as_ref()), "thesis")),
-        Payload::Verified(d) => need(!d.coin.address.is_empty(), "coin.address"),
-    }
-}
-
-/// `tweet/content` must carry the whole post: text, author, and a known kind.
-fn content_problem(d: &TweetPost) -> Option<String> {
-    let need = |ok: bool, what: &str| if ok { None } else { Some(format!("missing or invalid {what}")) };
-    need(!d.tweet_id.is_empty(), "tweetId")
-        .or_else(|| need(d.text.is_some(), "text"))
-        .or_else(|| need(d.author.is_some(), "author"))
-        .or_else(|| need(d.kind.is_some_and(|k| k != crate::protocol::PostKind::Other), "kind"))
-}
-
 fn platform_of(key: &str) -> String {
     key.split(':').next().unwrap_or("twitter").to_string()
-}
-
-fn account_platform(platform: Option<&str>) -> &str {
-    platform.unwrap_or("twitter")
-}
-
-/// Identities of a routed payload, kept as owned strings until dedupe borrows them.
-struct Ids {
-    event: Option<String>,
-    post: Option<String>,
-    payload: Option<String>,
-}
-
-impl Ids {
-    fn as_ids<'a>(&'a self, envelope: Option<&'a str>) -> EventIds<'a> {
-        EventIds { envelope, event: self.event.as_deref(), post: self.post.as_deref(), payload: self.payload.as_deref() }
-    }
-}
-
-/// Returns the event reference and the identities of a payload. Posts are named by post key;
-/// other events by `d.eventId`, else the envelope id.
-fn identify(pair: &str, envelope_id: Option<&str>, payload: &Payload) -> (String, Ids) {
-    let (event, post, own) = match payload {
-        Payload::Post(d) => (None, Some(post_key(&d.tweet_id, d.platform.as_deref(), d.author.as_ref())), None),
-        Payload::Meta(d) => (None, Some(post_key(&d.tweet_id, d.platform.as_deref(), None)), None),
-        Payload::Pin(d) => (d.event_id.clone(), Some(post_key(&d.tweet_id, d.platform.as_deref(), d.author.as_ref())), None),
-        Payload::Delete(d) => (d.event_id.clone(), Some(post_key(&d.tweet_id, d.platform.as_deref(), d.author.as_ref())), None),
-        Payload::Follow(d, _) => (d.event_id.clone(), None, None),
-        Payload::Profile(d) => (d.event_id.clone(), None, None),
-        Payload::Callout(d, _) => {
-            let call = d
-                .callout_id
-                .as_ref()
-                .map(|id| format!("{id}:{}:{}", d.kind.as_deref().unwrap_or("callout"), d.reply_id.as_deref().unwrap_or("")));
-            (d.event_id.clone(), None, call)
-        }
-        Payload::Thesis(d) => (d.event_id.clone(), None, d.thesis.id.clone()),
-        Payload::Verified(d) => (d.event_id.clone(), None, Some(d.coin.address.clone())),
-    };
-    let name = match &post {
-        Some(key) => key.clone(),
-        None => event.clone().or(envelope_id.map(str::to_string)).or(own.clone()).unwrap_or_default(),
-    };
-    (format!("{pair} {name}"), Ids { event, post, payload: own })
 }
 
 /// What the running bot needs from its caller.
@@ -407,7 +297,7 @@ impl RunningBot {
         for task in &self.tasks {
             task.abort();
         }
-        self.book.flush();
+        self.book.close();
     }
 }
 
@@ -501,22 +391,14 @@ fn on_event<N: Network>(
             receipt.mono,
         );
         trace.decided = Some(decided);
-        let (trader, fire, decider) = (Arc::clone(trader), fire.clone(), Arc::clone(decider));
-        match rule.token.action {
-            Action::Buy => drop(tokio::spawn(async move { trader.buy(fire, trace).await })),
-            Action::Sell => {
-                let reason = format!("rule {}", rule.name);
-                drop(tokio::spawn(async move {
-                    if trader.sell(&fire.mint, &reason).await == SellResult::NoPosition {
-                        decider.lock().unwrap_or_else(|p| p.into_inner()).release(&fire);
-                    }
-                }));
-            }
-        }
+        // Reserved here, before the next event is handled, so one mint is bought once.
+        let Some(reserved) = trader.reserve_buy(fire, &trace) else { continue };
+        let (trader, fire) = (Arc::clone(trader), fire.clone());
+        drop(tokio::spawn(async move { trader.buy(fire, reserved, trace).await }));
     }
     for exit in &outcome.exits {
-        let (trader, exit) = (Arc::clone(trader), exit.clone());
-        drop(tokio::spawn(async move { trader.exit(&exit.mint, exit.code.as_str(), &exit.detail).await }));
+        let (trader, mint, exit) = (Arc::clone(trader), exit.mint.clone(), PendingExit { code: exit.code, at: receipt.wall_ms });
+        drop(tokio::spawn(async move { trader.exit(&mint, exit).await }));
     }
     report.record_first_copy(&receipt.connection);
     if outcome.first_content
@@ -526,16 +408,16 @@ fn on_event<N: Network>(
     }
     for s in &outcome.signals {
         let who = s.actor.handle.as_ref().map_or_else(|| s.actor.namespace.as_str().to_string(), |h| format!("@{h}"));
-        log("signal", &format!("{} {} from {who} ({})", s.source.as_str(), short(&s.mint), s.event_ref));
+        log("signal", &format!("{} {} from {who} ({})", wire_name(&s.source), short(&s.mint), s.event_ref));
     }
     for s in &outcome.skips {
-        log("skip", &format!("{}: {}, {}", config.rules[s.rule].name, s.code.as_str(), s.detail));
+        log("skip", &format!("{}: {}, {}", config.rules[s.rule].name, wire_name(&s.code), s.detail));
     }
     for f in &outcome.fires {
         let rule = &config.rules[f.rule];
-        log("fire", &format!("{}: {} {}, {}", rule.name, rule.token.action.as_str(), short(&f.mint), f.detail));
+        log("fire", &format!("{}: buy {}, {}", rule.name, short(&f.mint), f.detail));
     }
     for e in &outcome.exits {
-        log("exit", &format!("{}: {}, {}", short(&e.mint), e.code.as_str(), e.detail));
+        log("exit", &format!("{}: the post it was bought on was deleted", short(&e.mint)));
     }
 }

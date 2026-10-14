@@ -56,22 +56,33 @@ pub struct KeywordFilter {
     pub patterns: Vec<Regex>,
 }
 
-/// Buy or sell.
+/// What fires a new_tweet rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Action {
-    /// Spend `amountSol`.
-    Buy,
-    /// Sell the whole position.
-    Sell,
+pub enum NewTweetEvent {
+    /// An original post.
+    Post,
+    /// A repost.
+    Retweet,
+    /// A quote.
+    Quote,
+    /// A reply.
+    Reply,
+    /// A bio change.
+    Bio,
+    /// A post kind the protocol may add later; no rule lists it.
+    #[serde(skip)]
+    Other,
 }
 
-impl Action {
-    /// Returns the config name.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Action::Buy => "buy",
-            Action::Sell => "sell",
+impl From<PostKind> for NewTweetEvent {
+    fn from(kind: PostKind) -> Self {
+        match kind {
+            PostKind::Post => NewTweetEvent::Post,
+            PostKind::Retweet => NewTweetEvent::Retweet,
+            PostKind::Quote => NewTweetEvent::Quote,
+            PostKind::Reply => NewTweetEvent::Reply,
+            PostKind::Other => NewTweetEvent::Other,
         }
     }
 }
@@ -82,8 +93,6 @@ impl Action {
 pub struct Token {
     /// The mint, or empty to trade the address in the event.
     pub mint: String,
-    /// Buy or sell.
-    pub action: Action,
     /// SOL per buy.
     pub amount_sol: f64,
 }
@@ -118,14 +127,8 @@ pub struct Filters {
     pub min_liquidity_usd: Option<f64>,
     /// Highest transfer fee in percent.
     pub max_pool_tax_pct: Option<f64>,
-    /// Allowed venues; empty allows any.
-    pub platforms: Vec<String>,
     /// Skip tokens the safety service flags.
     pub skip_suspicious_pools: bool,
-    /// Skip a mint already bought.
-    pub skip_if_already_bought: bool,
-    /// Skip a mint still held.
-    pub skip_if_already_holding: bool,
     /// What missing data means.
     pub on_missing_data: OnMissing,
 }
@@ -158,10 +161,8 @@ pub struct Fees {
     pub priority_fee_sol: FeeSetting,
     /// Jito tip.
     pub tip_sol: FeeSetting,
-    /// Also send through Jito.
+    /// Send only through Jito, with a tip.
     pub anti_mev: bool,
-    /// Jupiter retries after a graduation.
-    pub retries_on_graduation: u32,
 }
 
 /// One rule. After defaults every rule carries every field; each mode reads its own.
@@ -195,8 +196,8 @@ pub struct Rule {
     pub include_keywords: KeywordFilter,
     /// Never fire with one of these words.
     pub exclude_keywords: KeywordFilter,
-    /// new_tweet: which actions fire (`post`, `retweet`, `quote`, `reply`, `bio`).
-    pub events: Vec<String>,
+    /// new_tweet: which actions fire.
+    pub events: Vec<NewTweetEvent>,
     /// follow: follows, unfollows, or both.
     pub follow_events: Vec<FollowOp>,
     /// follow: only these followed accounts.
@@ -211,16 +212,12 @@ pub struct Rule {
     pub max_multiple: Option<f64>,
     /// callout: require the caller to hold.
     pub require_caller_position: bool,
-    /// callout: sell when the caller exits.
-    pub sell_when_caller_exits: bool,
     /// fomo: watched usernames or author ids.
     pub fomo_users: Vec<String>,
     /// fomo: watched coin addresses.
     pub fomo_coins: Vec<String>,
     /// fomo: theses, verifications, or both.
     pub fomo_events: Vec<FomoOp>,
-    /// fomo: sell when the author exits.
-    pub sell_when_author_exits: bool,
     /// Trade the first address in the event when `token.mint` is empty.
     pub use_detected_ca: bool,
     /// The token.
@@ -255,12 +252,6 @@ pub struct Safety {
     pub rugcheck: Rugcheck,
     /// Highest normalized risk score.
     pub max_rugcheck_score: Option<f64>,
-    /// Reject mints with a mint authority.
-    pub reject_mint_authority: bool,
-    /// Reject mints with a freeze authority.
-    pub reject_freeze_authority: bool,
-    /// Reject risky Token-2022 extensions.
-    pub reject_risky_extensions: bool,
 }
 
 /// Spend caps in SOL.
@@ -293,22 +284,10 @@ pub struct Exits {
     pub sell_slippage_pct: f64,
 }
 
-/// Where pump.fun buys are built.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PumpBuilder {
-    /// In process.
-    Local,
-    /// By the PumpPortal API.
-    Pumpportal,
-}
-
 /// Execution settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Execution {
-    /// Where pump.fun buys are built.
-    pub pump_builder: PumpBuilder,
     /// Compute unit limit.
     pub compute_unit_limit: u32,
     /// Ceiling for an automatic priority fee.
@@ -321,20 +300,6 @@ pub struct Execution {
     pub rebroadcast_ms: u64,
     /// Confirmation timeout.
     pub confirm_timeout_ms: u64,
-}
-
-/// An extra sendTransaction endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Sender {
-    /// Name for logs.
-    pub name: String,
-    /// Environment variable holding the URL.
-    pub url_env: String,
-    /// Tip accounts, one picked per transaction.
-    pub tip_accounts: Vec<String>,
-    /// Tip in SOL.
-    pub tip_sol: f64,
 }
 
 /// The whole config after defaults and validation.
@@ -353,8 +318,6 @@ pub struct Config {
     pub exits: Exits,
     /// Execution.
     pub execution: Execution,
-    /// Extra senders.
-    pub senders: Vec<Sender>,
 }
 
 /// A config problem, with one line saying what to fix.
@@ -418,7 +381,10 @@ pub fn parse_config(json: Value) -> Result<Config, ConfigError> {
 }
 
 fn is_additional_property(kind: &ValidationErrorKind) -> bool {
-    matches!(kind, ValidationErrorKind::AdditionalProperties { .. })
+    if let ValidationErrorKind::AdditionalProperties { .. } = kind {
+        return true;
+    }
+    false
 }
 
 fn resolve(node: &Value) -> &Value {
@@ -586,14 +552,6 @@ fn check_semantics(mut config: Config) -> Result<Config, ConfigError> {
     }
     if !config.rules.iter().any(|r| r.enabled) {
         return Err(ConfigError::new("every rule has \"enabled\": false. Turn one on.".to_string(), None, Some("rules")));
-    }
-    for (i, sender) in config.senders.iter().enumerate() {
-        for (j, account) in sender.tip_accounts.iter().enumerate() {
-            if !is_solana_address(account) {
-                let message = format!("senders \"{}\": tip account \"{account}\" is not a Solana address.", sender.name);
-                return Err(ConfigError::new(message, None, Some(&format!("senders.{i}.tipAccounts.{j}"))));
-            }
-        }
     }
     Ok(config)
 }

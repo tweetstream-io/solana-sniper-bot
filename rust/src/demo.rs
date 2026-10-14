@@ -40,7 +40,10 @@ fn is_last_step(line: &str) -> bool {
         return false;
     };
     let counts = rest.split(':').next().unwrap_or("");
-    matches!(counts.split_once('/'), Some((n, total)) if !n.is_empty() && n == total)
+    match counts.split_once('/') {
+        Some((n, total)) => !n.is_empty() && n == total,
+        None => false,
+    }
 }
 
 /// Runs the demo and returns the process exit code.

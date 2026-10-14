@@ -12,6 +12,8 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use crate::execute::pump::WSOL_MINT;
+
 /// One account as returned by the RPC.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountData {
@@ -30,8 +32,6 @@ pub struct MarketSnapshot {
     pub liquidity_usd: Option<f64>,
     /// Earliest pool creation.
     pub created_at_ms: Option<f64>,
-    /// Venue of the deepest pool, as DexScreener names it (pumpfun, raydium, ...).
-    pub platform: Option<String>,
 }
 
 /// The parts of a Rugcheck report the gate reads.
@@ -119,8 +119,6 @@ pub struct JupiterExecute {
     pub signature: Option<String>,
     /// Error text.
     pub error: Option<String>,
-    /// Tokens received.
-    pub total_output_amount: Option<String>,
 }
 
 /// What a Jupiter order is for.
@@ -149,11 +147,11 @@ pub trait Network: Send + Sync + 'static {
     fn epoch_info(&self) -> impl Future<Output = NetResult<EpochInfo>> + Send;
     /// Returns the status of a sent transaction, or `None` when the RPC has not seen it.
     fn signature_status(&self, signature: &str) -> impl Future<Output = NetResult<Option<SignatureStatus>>> + Send;
+    /// Returns whether a blockhash can still be used, asked at `processed`.
+    fn is_blockhash_valid(&self, blockhash: &str) -> impl Future<Output = NetResult<bool>> + Send;
     /// Returns how many lamports the transaction took from `owner` (fees, tips, rent, principal), or
     /// `None` when the transaction is not found.
     fn transaction_debit(&self, signature: &str, owner: &str) -> impl Future<Output = NetResult<Option<i128>>> + Send;
-    /// Returns an unsigned transaction from the PumpPortal local trading API.
-    fn pumpportal_tx(&self, body: Value) -> impl Future<Output = NetResult<Vec<u8>>> + Send;
     /// Asks Jupiter for an order the taker signs.
     fn jupiter_order(&self, request: OrderRequest) -> impl Future<Output = NetResult<JupiterOrder>> + Send;
     /// Hands a signed order to Jupiter, which lands it. An error means the outcome is unknown.
@@ -178,6 +176,41 @@ pub trait Network: Send + Sync + 'static {
     fn market_snapshot(&self, mint: &str) -> impl Future<Output = NetResult<MarketSnapshot>> + Send;
     /// Returns the Rugcheck summary, or `None` when there is no report.
     fn rugcheck(&self, mint: &str) -> impl Future<Output = NetResult<Option<RugcheckSummary>>> + Send;
+}
+
+/// Asks `getSignatureStatuses` about one signature, searching the full history when asked, and
+/// returns `None` when the RPC has not seen it. The one parser of that answer.
+///
+/// # Errors
+///
+/// Returns [`NetError`] when the call fails.
+pub async fn fetch_signature_status(
+    client: &reqwest::Client,
+    url: &str,
+    signature: &str,
+    history: bool,
+    timeout: Duration,
+) -> NetResult<Option<SignatureStatus>> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Entry {
+        confirmation_status: Option<String>,
+        err: Option<Value>,
+    }
+    #[derive(Deserialize)]
+    struct Reply {
+        value: Vec<Option<Entry>>,
+    }
+    let params = json!([[signature], { "searchTransactionHistory": history }]);
+    let reply: Reply = rpc_call(client, url, "getSignatureStatuses", params, timeout).await?;
+    let Some(Some(entry)) = reply.value.into_iter().next() else {
+        return Ok(None);
+    };
+    let confirmed = match entry.confirmation_status.as_deref() {
+        Some("confirmed" | "finalized") => true,
+        Some(_) | None => false,
+    };
+    Ok(Some(SignatureStatus { confirmed, err: entry.err.filter(|e| !e.is_null()) }))
 }
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -234,8 +267,6 @@ pub async fn rpc_call<T: DeserializeOwned>(
     serde_json::from_value(reply.result).map_err(|e| NetError(format!("{method}: {e}")))
 }
 
-/// Wrapped SOL mint.
-pub const WSOL: &str = "So11111111111111111111111111111111111111112";
 const JUPITER: &str = "https://api.jup.ag";
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 const SIDE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -308,23 +339,17 @@ impl Network for LiveNetwork {
     }
 
     async fn signature_status(&self, signature: &str) -> NetResult<Option<SignatureStatus>> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Entry {
-            confirmation_status: Option<String>,
-            err: Option<Value>,
-        }
+        fetch_signature_status(&self.client, &self.rpc_url, signature, true, READ_TIMEOUT).await
+    }
+
+    async fn is_blockhash_valid(&self, blockhash: &str) -> NetResult<bool> {
         #[derive(Deserialize)]
         struct Reply {
-            value: Vec<Option<Entry>>,
+            value: bool,
         }
-        let params = json!([[signature], { "searchTransactionHistory": true }]);
-        let reply: Reply = rpc_call(&self.client, &self.rpc_url, "getSignatureStatuses", params, READ_TIMEOUT).await?;
-        let Some(Some(entry)) = reply.value.into_iter().next() else {
-            return Ok(None);
-        };
-        let confirmed = matches!(entry.confirmation_status.as_deref(), Some("confirmed" | "finalized"));
-        Ok(Some(SignatureStatus { confirmed, err: entry.err.filter(|e| !e.is_null()) }))
+        let params = json!([blockhash, { "commitment": "processed" }]);
+        let reply: Reply = rpc_call(&self.client, &self.rpc_url, "isBlockhashValid", params, READ_TIMEOUT).await?;
+        Ok(reply.value)
     }
 
     async fn transaction_debit(&self, signature: &str, owner: &str) -> NetResult<Option<i128>> {
@@ -346,15 +371,6 @@ impl Network for LiveNetwork {
             return Ok(None);
         };
         Ok(Some(i128::from(pre) - i128::from(post)))
-    }
-
-    /// PumpPortal local trading API (<https://pumpportal.fun/local-trading-api/trading-api/>).
-    async fn pumpportal_tx(&self, body: Value) -> NetResult<Vec<u8>> {
-        let response = self.client.post("https://pumpportal.fun/api/trade-local").json(&body).timeout(SIDE_TIMEOUT).send().await?;
-        if response.status().as_u16() != 200 {
-            return Err(NetError(format!("PumpPortal HTTP {}", response.status().as_u16())));
-        }
-        Ok(response.bytes().await?.to_vec())
     }
 
     async fn jupiter_order(&self, request: OrderRequest) -> NetResult<JupiterOrder> {
@@ -387,7 +403,8 @@ impl Network for LiveNetwork {
         struct Quote {
             out_amount: Option<String>,
         }
-        let response = self.jupiter(format!("{JUPITER}/swap/v2/order?inputMint={mint}&outputMint={WSOL}&amount={tokens}")).send().await?;
+        let response =
+            self.jupiter(format!("{JUPITER}/swap/v2/order?inputMint={mint}&outputMint={WSOL_MINT}&amount={tokens}")).send().await?;
         if !response.status().is_success() {
             return Ok(None);
         }
@@ -439,12 +456,12 @@ impl Network for LiveNetwork {
     /// Jupiter Price API V3 (<https://dev.jup.ag/docs/price/v3>). An absent mint means no reliable
     /// price.
     async fn sol_usd_price(&self) -> NetResult<Option<f64>> {
-        let response = self.jupiter(format!("{JUPITER}/price/v3?ids={WSOL}")).send().await?;
+        let response = self.jupiter(format!("{JUPITER}/price/v3?ids={WSOL_MINT}")).send().await?;
         if !response.status().is_success() {
             return Ok(None);
         }
         let body: Value = response.json().await?;
-        Ok(body[WSOL]["usdPrice"].as_f64())
+        Ok(body[WSOL_MINT.to_string().as_str()]["usdPrice"].as_f64())
     }
 
     /// DexScreener "Get the pools of a given token address"
@@ -458,7 +475,6 @@ impl Network for LiveNetwork {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Pair {
-            dex_id: Option<String>,
             liquidity: Option<Liquidity>,
             market_cap: Option<f64>,
             pair_created_at: Option<f64>,
@@ -487,7 +503,6 @@ impl Network for LiveNetwork {
             market_cap_usd: deepest.market_cap,
             liquidity_usd: deepest.liquidity.as_ref().and_then(|l| l.usd),
             created_at_ms: created,
-            platform: deepest.dex_id.clone(),
         })
     }
 

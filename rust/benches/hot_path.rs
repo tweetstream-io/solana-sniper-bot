@@ -125,7 +125,9 @@ async fn run(n: usize) {
         for fire in outcome.fires {
             let mut trace = Trace::new(mint, "bench", "bench", &outcome.event_ref, None, now as i64, received);
             trace.decided = Some(decided);
-            trader.buy(fire, trace).await;
+            if let Some(reserved) = trader.reserve_buy(&fire, &trace) {
+                trader.buy(fire, reserved, trace).await;
+            }
         }
     }
     for task in tasks {

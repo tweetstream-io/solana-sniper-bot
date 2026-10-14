@@ -26,17 +26,17 @@ cargo test
 cargo bench
 ```
 
-`cargo test` runs the shared event and config fixtures (`tests/fixtures.rs`), the trade state machine (`tests/trades.rs`), trades end to end against local stand-ins for an RPC, Jito, and the RPC WebSocket (`tests/trade.rs`), and the on-chain layouts, the safety gate, landing, and the feed handshake.
+`cargo test` runs the shared event, config, and ledger fixtures (`tests/fixtures.rs`), the trade state file and its lock (`tests/trades.rs`), trades end to end against local stand-ins for an RPC, Jito, and the RPC WebSocket (`tests/trade.rs`), and the on-chain layouts, the caches, the safety gate, landing, and the feed handshake.
 
 ## Speed
 
-`cargo bench` feeds 2,000 posts, each with a new mint, through the decider and the trader in dry run, the same events as `npm run bench`. The chain read is answered from memory after a 1 ms wait that stands in for a nearby RPC. Both ran on the same machine, an AMD EPYC 9354P with other work on it (load average about 17), Rust 1.99 and Node 22.23. Your numbers will differ.
+`cargo bench` feeds 2,000 posts, each with a new mint, through the decider and the trader in dry run, the same events as `npm run bench`. The chain read is answered from memory after a 1 ms wait that stands in for a nearby RPC. Both ran on the same machine, an AMD EPYC 9354P with other work on it (load average about 20), Rust 1.99 and Node 22.23. Your numbers will differ.
 
 | Stage | Rust p50 | Rust p95 | TypeScript p50 | TypeScript p95 |
 | --- | --- | --- | --- | --- |
-| receipt->decision (JSON parse, dedupe, detect, rules) | 9.0 µs | 17.1 µs | 48.8 µs | 54.8 µs |
-| build+sign | 0.027 ms | 0.033 ms | 0.424 ms | 0.493 ms |
-| decision->signed (includes the 1 ms read) | 1.099 ms | 1.118 ms | 1.491 ms | 2.327 ms |
+| receipt->decision (JSON parse, dedupe, detect, rules) | 10.9 µs | 19.0 µs | 97.1 µs | 415.9 µs |
+| build+sign | 0.030 ms | 0.047 ms | 0.457 ms | 0.697 ms |
+| decision->signed (includes the 1 ms read) | 1.095 ms | 1.118 ms | 1.505 ms | 2.367 ms |
 
 Most of the remaining Rust time between receipt and a signed buy is the chain read itself.
 
@@ -48,5 +48,6 @@ Most of the remaining Rust time between receipt and a signed buy is the chain re
 - serde_json 1, parsing the envelope once and each payload only after routing on `t` and `op`.
 - The split Solana crates: solana-pubkey 4.4, solana-instruction 4.0, solana-message 5.1, solana-transaction 5.1, solana-keypair 4.0, solana-signer 4.0, solana-signature 3.6, solana-hash 4.7, solana-compute-budget-interface 3.1, solana-system-interface 3.3, with wincode 0.6 for the wire format.
 - jsonschema 0.58 for `config.schema.json` and `ledger.schema.json`.
+- libc, for the one call that asks whether the process named in a state lock still runs.
 
-The trade state is written with fsync before anything is sent, as `shared/README.md` requires. The write happens outside the lock that the rule engine takes, so a decision never waits on the disk.
+A trade is written to the state file with fsync before it is sent, as `shared/README.md` requires. The write happens outside the lock that the rule engine takes, so a decision never waits on the disk, and the reconciler only sees a trade once its write has completed.

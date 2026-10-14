@@ -13,7 +13,7 @@ use solana_sniper_bot::land::land::{SenderKind, SenderTarget};
 use solana_sniper_bot::log::log;
 use solana_sniper_bot::network::{LiveNetwork, http_client};
 use solana_sniper_bot::pipeline::{BotOptions, start_bot};
-use solana_sniper_bot::setup::config::{Config, handle_warnings, load_config};
+use solana_sniper_bot::setup::config::{handle_warnings, load_config};
 use solana_sniper_bot::setup::env::{Env, read_env, setup_help, ultra_trial_link};
 use tokio::sync::mpsc;
 
@@ -55,32 +55,17 @@ fn wallet(env: &Env) -> Result<Keypair, String> {
     Keypair::try_from(bytes.as_slice()).map_err(|_| "WALLET_SECRET_KEY is not a valid Ed25519 key pair.".to_string())
 }
 
-/// Every RPC, Jito, and each extra sender from `config.json`, whose URL comes from `.env`.
-fn sender_targets(env: &Env, config: &Config) -> Result<Vec<SenderTarget>, String> {
+/// Every RPC URL, plus Jito when `JITO_URL` is set.
+fn sender_targets(env: &Env) -> Vec<SenderTarget> {
     let mut targets = Vec::new();
     for url in &env.rpc_urls {
         let name = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_else(|| url.clone());
-        targets.push(SenderTarget { name, url: url.clone(), kind: SenderKind::Rpc, needs_tip: false });
+        targets.push(SenderTarget { name, url: url.clone(), kind: SenderKind::Rpc });
     }
     if let Some(jito) = &env.jito_url {
-        targets.push(SenderTarget {
-            name: "jito".to_string(),
-            url: format!("{jito}/api/v1/transactions"),
-            kind: SenderKind::Jito,
-            needs_tip: false,
-        });
+        targets.push(SenderTarget { name: "jito".to_string(), url: format!("{jito}/api/v1/transactions"), kind: SenderKind::Jito });
     }
-    for sender in &config.senders {
-        let Some(url) = env.var(&sender.url_env) else {
-            return Err(format!(
-                "senders \"{}\": set {} in .env to the sender's URL, or remove the sender from config.json.",
-                sender.name, sender.url_env
-            ));
-        };
-        let needs_tip = !sender.tip_accounts.is_empty() && sender.tip_sol > 0.0;
-        targets.push(SenderTarget { name: sender.name.clone(), url, kind: SenderKind::Rpc, needs_tip });
-    }
-    Ok(targets)
+    targets
 }
 
 async fn run() -> i32 {
@@ -102,10 +87,7 @@ async fn run() -> i32 {
         Ok(wallet) => wallet,
         Err(message) => return fail(&message),
     };
-    let senders = match sender_targets(&env, &config) {
-        Ok(senders) => senders,
-        Err(message) => return fail(&message),
-    };
+    let senders = sender_targets(&env);
     if env.dry_run {
         log("mode", "DRY RUN: nothing is sent. Set DRY_RUN=false in .env to trade.");
     } else {

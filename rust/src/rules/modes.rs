@@ -1,6 +1,6 @@
 //! The rule modes: for each, which activities and account keys it listens to ([`listens`]) and a
-//! pure matcher ([`match_rule`]) that answers fire (with a mint), skip (with a stable code), exit,
-//! or nothing. Next: `rules/engine.rs` applies the limits that need memory.
+//! pure matcher ([`match_rule`]) that answers fire (with a mint), skip (with a stable code), or
+//! nothing. Next: `rules/engine.rs` applies the limits that need memory.
 //!
 //! The matching conventions live here: X accounts match by numeric id or by handle without case,
 //! only for `x` actors; pump.fun callers and FOMO users match without case; FOMO coins match
@@ -13,8 +13,9 @@ use crate::detect::types::{
     Activity, ActivityKind, Actor, CalloutActivity, CalloutOp, Chain, FollowActivity, FomoActivity, FomoOp, Namespace, PostActivity,
     ProfileActivity, Signal,
 };
+use crate::log::wire_name;
 use crate::protocol::PostKind;
-use crate::setup::config::{KeywordFilter, Mode, Rule};
+use crate::setup::config::{KeywordFilter, Mode, NewTweetEvent, Rule};
 
 /// X accounts are keyed `id:<id>` or `h:<handle>`, pump.fun callers `pf:<name>`, FOMO authors
 /// `fu:<id or name>`, FOMO coins `fc:<address>`.
@@ -106,43 +107,6 @@ pub fn activity_type(kind: &ActivityKind) -> ActivityType {
     }
 }
 
-/// Returns the activity types a rule listens to and the account keys it listens under.
-pub fn listens(rule: &Rule) -> Vec<(ActivityType, String)> {
-    let x = |types: &[ActivityType], specs: &[String]| {
-        let mut keys = Vec::new();
-        for t in types {
-            for spec in specs {
-                keys.push((*t, x_spec_key(spec)));
-            }
-        }
-        keys
-    };
-    match rule.mode {
-        Mode::CaScanner => x(&[ActivityType::Post, ActivityType::Profile, ActivityType::Pin], &rule.accounts),
-        Mode::Engagement => x(&[ActivityType::Post], std::slice::from_ref(&rule.reactor)),
-        Mode::NewTweet => x(&[ActivityType::Post, ActivityType::Profile], &rule.accounts),
-        Mode::Follow => x(&[ActivityType::Follow], &rule.accounts),
-        Mode::PfpUpdate => x(&[ActivityType::Profile], &rule.accounts),
-        Mode::Callout => {
-            let mut keys = Vec::new();
-            for caller in &rule.callers {
-                keys.push((ActivityType::Callout, format!("pf:{}", caller.to_lowercase())));
-            }
-            keys
-        }
-        Mode::Fomo => {
-            let mut keys = Vec::new();
-            for user in &rule.fomo_users {
-                keys.push((ActivityType::Fomo, format!("fu:{}", user.to_lowercase())));
-            }
-            for coin in &rule.fomo_coins {
-                keys.push((ActivityType::Fomo, format!("fc:{coin}")));
-            }
-            keys
-        }
-    }
-}
-
 /// Stable skip codes, shared with the TypeScript bot through `shared/fixtures`. Free text goes in
 /// the detail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -176,74 +140,6 @@ pub enum SkipCode {
     MaxSnipes,
 }
 
-impl SkipCode {
-    /// Returns the stable code.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SkipCode::StalePost => "stale_post",
-            SkipCode::KeywordIncludeMissing => "keyword_include_missing",
-            SkipCode::KeywordExcludeFound => "keyword_exclude_found",
-            SkipCode::NoContractAddress => "no_contract_address",
-            SkipCode::EvmNotSupported => "evm_not_supported",
-            SkipCode::LowConfidence => "low_confidence",
-            SkipCode::MintNotInBio => "mint_not_in_bio",
-            SkipCode::BioNotInPayload => "bio_not_in_payload",
-            SkipCode::UpdateNotNew => "update_not_new",
-            SkipCode::MultipleTooHigh => "multiple_too_high",
-            SkipCode::CallerNotHolding => "caller_not_holding",
-            SkipCode::Cooldown => "cooldown",
-            SkipCode::MaxSnipes => "max_snipes",
-        }
-    }
-}
-
-/// Why a rule exits a position it opened.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExitCode {
-    /// The post the buy came from was deleted.
-    PostDeleted,
-    /// The caller reports holding none of the token.
-    CallerExited,
-    /// The FOMO author closed the position.
-    AuthorExited,
-}
-
-impl ExitCode {
-    /// Returns the stable code.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ExitCode::PostDeleted => "post_deleted",
-            ExitCode::CallerExited => "caller_exited",
-            ExitCode::AuthorExited => "author_exited",
-        }
-    }
-}
-
-/// What a matcher returns when its rule fires. The engine adds the acting account to make a
-/// [`Fire`].
-#[derive(Debug, Clone)]
-pub struct Hit {
-    /// Index of the rule in the config.
-    pub rule: usize,
-    /// The mint to trade.
-    pub mint: String,
-    /// The signal that supplied the mint; `None` when the rule names the mint.
-    pub signal: Option<Signal>,
-    /// Free text for logs.
-    pub detail: String,
-    /// A rule fires once per key: per post, per account event, or per mint.
-    pub fire_key: String,
-}
-
-impl Hit {
-    /// Returns the fire, triggered by `actor`.
-    pub fn fire(self, actor: Actor) -> Fire {
-        let Hit { rule, mint, signal, detail, fire_key } = self;
-        Fire { rule, mint, signal, detail, fire_key, actor }
-    }
-}
-
 /// A rule that fired on a mint.
 #[derive(Debug, Clone)]
 pub struct Fire {
@@ -257,8 +153,6 @@ pub struct Fire {
     pub detail: String,
     /// A rule fires once per key: per post, per account event, or per mint.
     pub fire_key: String,
-    /// Who triggered it, kept on the position for caller and author exits.
-    pub actor: Actor,
 }
 
 /// A rule looked at the event and decided not to trade.
@@ -272,53 +166,21 @@ pub struct Skip {
     pub detail: String,
 }
 
-/// A rule sells a position it bought, because the account it followed has left the trade.
-#[derive(Debug, Clone)]
-pub struct RuleExit {
-    /// Index of the rule in the config.
-    pub rule: usize,
-    /// The caller or author who left; only positions they triggered are sold.
-    pub actor: Actor,
-    /// The mint to sell.
-    pub mint: String,
-    /// Why.
-    pub code: ExitCode,
-    /// Free text for logs.
-    pub detail: String,
-}
-
 /// What one rule made of one activity.
 #[derive(Debug, Clone)]
-pub enum Verdict {
+#[expect(clippy::large_enum_variant, reason = "verdicts live briefly in a Vec; boxing a fire would allocate on the hot path")]
+pub enum RuleVerdict {
     /// Trade.
-    Fire(Hit),
+    Fire(Fire),
     /// Do not trade, with a reason.
     Skip(Skip),
-    /// Sell a position this rule opened.
-    Exit(RuleExit),
 }
 
-fn skip(rule: usize, code: SkipCode, detail: String) -> Verdict {
-    Verdict::Skip(Skip { rule, code, detail })
+fn skip(rule: usize, code: SkipCode, detail: String) -> RuleVerdict {
+    RuleVerdict::Skip(Skip { rule, code, detail })
 }
 
-/// Returns the verdicts of one rule for one activity, in signal order.
-pub fn match_rule(index: usize, rule: &Rule, activity: &Activity, known_bio: Option<&str>) -> Vec<Verdict> {
-    let one = |v: Option<Verdict>| v.into_iter().collect();
-    match (rule.mode, &activity.kind) {
-        (Mode::CaScanner, _) => match_ca_scanner(index, rule, activity, known_bio),
-        (Mode::Engagement, ActivityKind::Post(post)) => one(match_engagement(index, rule, post, &activity.signals)),
-        (Mode::NewTweet, ActivityKind::Post(post)) => one(match_new_tweet_post(index, rule, post, &activity.signals)),
-        (Mode::NewTweet, ActivityKind::Profile(profile)) => one(match_new_tweet_bio(index, rule, profile, activity)),
-        (Mode::Follow, ActivityKind::Follow(follow)) => one(match_follow(index, rule, follow, activity)),
-        (Mode::PfpUpdate, ActivityKind::Profile(profile)) => one(match_pfp(index, rule, profile, activity)),
-        (Mode::Callout, ActivityKind::Callout(callout)) => match_callout(index, rule, callout, activity),
-        (Mode::Fomo, ActivityKind::Fomo(fomo)) => match_fomo(index, rule, fomo, activity),
-        _ => Vec::new(),
-    }
-}
-
-fn keyword_skip(index: usize, rule: &Rule, texts: &[Vec<String>]) -> Option<Verdict> {
+fn keyword_skip(index: usize, rule: &Rule, texts: &[Vec<String>]) -> Option<RuleVerdict> {
     let include = &rule.include_keywords;
     if !include.words.is_empty() && find_word(texts, include).is_none() {
         let detail = format!("none of [{}] within scan depth {}", include.words.join(", "), include.scan_depth);
@@ -330,13 +192,13 @@ fn keyword_skip(index: usize, rule: &Rule, texts: &[Vec<String>]) -> Option<Verd
 }
 
 /// The configured mint, or with `useDetectedCa` the first Solana address the event carried.
-fn pick_mint(index: usize, rule: &Rule, signals: &[Signal], detail: String, fire_key: String) -> Verdict {
+fn pick_mint(index: usize, rule: &Rule, signals: &[Signal], detail: String, fire_key: String) -> RuleVerdict {
     if !rule.token.mint.is_empty() {
-        return Verdict::Fire(Hit { rule: index, mint: rule.token.mint.clone(), signal: None, detail, fire_key });
+        return RuleVerdict::Fire(Fire { rule: index, mint: rule.token.mint.clone(), signal: None, detail, fire_key });
     }
     if let Some(signal) = signals.iter().find(|s| s.chain == Chain::Solana) {
-        let detail = format!("{detail}, CA from {}", signal.source.as_str());
-        return Verdict::Fire(Hit { rule: index, mint: signal.mint.clone(), signal: Some(signal.clone()), detail, fire_key });
+        let detail = format!("{detail}, CA from {}", wire_name(&signal.source));
+        return RuleVerdict::Fire(Fire { rule: index, mint: signal.mint.clone(), signal: Some(signal.clone()), detail, fire_key });
     }
     match signals.iter().find(|s| s.chain == Chain::Evm) {
         Some(evm) => {
@@ -347,7 +209,7 @@ fn pick_mint(index: usize, rule: &Rule, signals: &[Signal], detail: String, fire
 }
 
 /// The token the event names, limited to `token.mint` when the rule sets one.
-fn event_token(index: usize, rule: &Rule, signals: &[Signal], detail: String) -> Option<Verdict> {
+fn event_token(index: usize, rule: &Rule, signals: &[Signal], detail: String) -> Option<RuleVerdict> {
     let Some(signal) = signals.first() else {
         return Some(skip(index, SkipCode::NoContractAddress, format!("{detail}: the token address is not a valid Solana or EVM address")));
     };
@@ -358,11 +220,11 @@ fn event_token(index: usize, rule: &Rule, signals: &[Signal], detail: String) ->
         return Some(skip(index, SkipCode::EvmNotSupported, format!("{detail}: EVM token {}; execution is Solana-only", signal.mint)));
     }
     let fire_key = format!("{}|{}", rule.name, signal.mint);
-    Some(Verdict::Fire(Hit { rule: index, mint: signal.mint.clone(), signal: Some(signal.clone()), detail, fire_key }))
+    Some(RuleVerdict::Fire(Fire { rule: index, mint: signal.mint.clone(), signal: Some(signal.clone()), detail, fire_key }))
 }
 
 /// Mode `ca_scanner`: trade contract addresses the watched accounts post.
-fn match_ca_scanner(index: usize, rule: &Rule, activity: &Activity, known_bio: Option<&str>) -> Vec<Verdict> {
+fn match_ca_scanner(index: usize, rule: &Rule, activity: &Activity, known_bio: Option<&str>) -> Vec<RuleVerdict> {
     let mut out = Vec::new();
     for s in &activity.signals {
         if !rule.sources.contains(&s.source) {
@@ -372,11 +234,11 @@ fn match_ca_scanner(index: usize, rule: &Rule, activity: &Activity, known_bio: O
             continue;
         }
         if s.chain != Chain::Solana {
-            out.push(skip(index, SkipCode::EvmNotSupported, format!("EVM address {} in {}", s.mint, s.source.as_str())));
+            out.push(skip(index, SkipCode::EvmNotSupported, format!("EVM address {} in {}", s.mint, wire_name(&s.source))));
         } else if s.confidence < rule.min_confidence {
             let detail = format!(
                 "{} signal is {}, rule needs {}",
-                s.source.as_str(),
+                wire_name(&s.source),
                 confidence_name(s.confidence),
                 confidence_name(rule.min_confidence)
             );
@@ -385,7 +247,7 @@ fn match_ca_scanner(index: usize, rule: &Rule, activity: &Activity, known_bio: O
             out.push(skip(index, SkipCode::MintNotInBio, format!("{} is not in the account's last known bio", s.mint)));
         } else {
             let fire_key = format!("{}|{}", rule.name, s.mint);
-            out.push(Verdict::Fire(Hit {
+            out.push(RuleVerdict::Fire(Fire {
                 rule: index,
                 mint: s.mint.clone(),
                 signal: Some(s.clone()),
@@ -407,7 +269,7 @@ fn confidence_name(c: crate::detect::types::Confidence) -> &'static str {
 
 /// Mode `engagement`: the reactor retweets, quotes, or replies to the target post or a target
 /// account.
-fn match_engagement(index: usize, rule: &Rule, a: &PostActivity, signals: &[Signal]) -> Option<Verdict> {
+fn match_engagement(index: usize, rule: &Rule, a: &PostActivity, signals: &[Signal]) -> Option<RuleVerdict> {
     let action = match a.kind {
         PostKind::Quote | PostKind::Reply | PostKind::Retweet => a.kind,
         PostKind::Post | PostKind::Other => return None,
@@ -432,24 +294,24 @@ fn match_engagement(index: usize, rule: &Rule, a: &PostActivity, signals: &[Sign
     } else {
         format!("post {}", rule.target_tweet_id)
     };
-    Some(pick_mint(index, rule, signals, format!("{} of {what}", a.kind.as_str()), format!("{}|{}", rule.name, a.post_key)))
+    Some(pick_mint(index, rule, signals, format!("{} of {what}", wire_name(&a.kind)), format!("{}|{}", rule.name, a.post_key)))
 }
 
 /// Mode `new_tweet` on posts: a watched account posts, retweets, quotes, or replies.
-fn match_new_tweet_post(index: usize, rule: &Rule, a: &PostActivity, signals: &[Signal]) -> Option<Verdict> {
-    if !rule.events.iter().any(|e| e == a.kind.as_str()) {
+fn match_new_tweet_post(index: usize, rule: &Rule, a: &PostActivity, signals: &[Signal]) -> Option<RuleVerdict> {
+    if !rule.events.contains(&NewTweetEvent::from(a.kind)) {
         return None;
     }
     if let Some(blocked) = keyword_skip(index, rule, &a.texts) {
         return Some(blocked);
     }
-    Some(pick_mint(index, rule, signals, format!("new {}", a.kind.as_str()), format!("{}|{}", rule.name, a.post_key)))
+    Some(pick_mint(index, rule, signals, format!("new {}", wire_name(&a.kind)), format!("{}|{}", rule.name, a.post_key)))
 }
 
 /// Mode `new_tweet` on bios: a watched account changes its bio.
-fn match_new_tweet_bio(index: usize, rule: &Rule, a: &ProfileActivity, activity: &Activity) -> Option<Verdict> {
+fn match_new_tweet_bio(index: usize, rule: &Rule, a: &ProfileActivity, activity: &Activity) -> Option<RuleVerdict> {
     let bio = a.bio.as_ref()?;
-    if !rule.events.iter().any(|e| e == "bio") {
+    if !rule.events.contains(&NewTweetEvent::Bio) {
         return None;
     }
     if let Some(blocked) = keyword_skip(index, rule, &[vec![bio.clone()]]) {
@@ -459,7 +321,7 @@ fn match_new_tweet_bio(index: usize, rule: &Rule, a: &ProfileActivity, activity:
 }
 
 /// Mode `follow`: a watched account follows or unfollows someone.
-fn match_follow(index: usize, rule: &Rule, a: &FollowActivity, activity: &Activity) -> Option<Verdict> {
+fn match_follow(index: usize, rule: &Rule, a: &FollowActivity, activity: &Activity) -> Option<RuleVerdict> {
     if !rule.follow_events.contains(&a.op) {
         return None;
     }
@@ -479,11 +341,11 @@ fn match_follow(index: usize, rule: &Rule, a: &FollowActivity, activity: &Activi
 }
 
 /// Mode `pfp_update`: a watched account changes its avatar, or another selected profile field.
-fn match_pfp(index: usize, rule: &Rule, a: &ProfileActivity, activity: &Activity) -> Option<Verdict> {
+fn match_pfp(index: usize, rule: &Rule, a: &ProfileActivity, activity: &Activity) -> Option<RuleVerdict> {
     let mut hit = Vec::new();
     for field in &rule.fields {
         if a.changed.contains(field) {
-            hit.push(field.as_str());
+            hit.push(wire_name(field));
         }
     }
     if hit.is_empty() {
@@ -494,23 +356,10 @@ fn match_pfp(index: usize, rule: &Rule, a: &ProfileActivity, activity: &Activity
 }
 
 /// Mode `callout`: a watched pump.fun caller posts a callout. `callout_update` only enriches an
-/// earlier call, so it never buys; it can still report that the caller sold.
-fn match_callout(index: usize, rule: &Rule, a: &CalloutActivity, activity: &Activity) -> Vec<Verdict> {
+/// earlier call, so it never buys.
+fn match_callout(index: usize, rule: &Rule, a: &CalloutActivity, activity: &Activity) -> Vec<RuleVerdict> {
     let mut out = Vec::new();
     let caller = activity.actor.handle.as_deref().unwrap_or("");
-    if let Some(signal) = activity.signals.first()
-        && rule.sell_when_caller_exits
-        && a.caller_holds == Some(false)
-    {
-        let detail = format!("@{caller} reports holding 0");
-        out.push(Verdict::Exit(RuleExit {
-            actor: activity.actor.clone(),
-            rule: index,
-            mint: signal.mint.clone(),
-            code: ExitCode::CallerExited,
-            detail,
-        }));
-    }
     let watched = a.kind.is_some_and(|k| rule.callout_kinds.contains(&k));
     if a.op == CalloutOp::Update {
         if watched {
@@ -521,7 +370,7 @@ fn match_callout(index: usize, rule: &Rule, a: &CalloutActivity, activity: &Acti
     let Some(kind) = a.kind.filter(|_| watched) else {
         return out;
     };
-    let detail = format!("{} by {caller}", kind.as_str());
+    let detail = format!("{} by {caller}", wire_name(&kind));
     match (rule.max_multiple, a.multiple) {
         (Some(max), Some(multiple)) if multiple > max => {
             out.push(skip(index, SkipCode::MultipleTooHigh, format!("{detail}: already {multiple}x, rule allows {max}x")));
@@ -536,24 +385,8 @@ fn match_callout(index: usize, rule: &Rule, a: &CalloutActivity, activity: &Acti
 
 /// Mode `fomo`: a FOMO thesis by a watched author or on a watched coin, or a watched coin's first
 /// observed verification.
-fn match_fomo(index: usize, rule: &Rule, a: &FomoActivity, activity: &Activity) -> Vec<Verdict> {
+fn match_fomo(index: usize, rule: &Rule, a: &FomoActivity, activity: &Activity) -> Vec<RuleVerdict> {
     let mut out = Vec::new();
-    let by_watched_author = rule.fomo_users.iter().any(|u| matches_fomo_user(u, &activity.actor));
-    if let Some(signal) = activity.signals.first()
-        && a.op == FomoOp::Thesis
-        && rule.sell_when_author_exits
-        && a.author_exited
-        && by_watched_author
-    {
-        let detail = format!("{} closed the position", activity.actor.handle.as_deref().unwrap_or(""));
-        out.push(Verdict::Exit(RuleExit {
-            actor: activity.actor.clone(),
-            rule: index,
-            mint: signal.mint.clone(),
-            code: ExitCode::AuthorExited,
-            detail,
-        }));
-    }
     if a.author_exited || !rule.fomo_events.contains(&a.op) {
         return out;
     }
@@ -572,4 +405,100 @@ fn match_fomo(index: usize, rule: &Rule, a: &FomoActivity, activity: &Activity) 
     };
     out.extend(event_token(index, rule, &activity.signals, detail));
     out
+}
+
+/// One rule mode: the activities it listens to, the account keys it listens under, and its matcher.
+struct ModeEntry {
+    activities: &'static [ActivityType],
+    keys: fn(&Rule) -> Vec<String>,
+    matcher: fn(usize, &Rule, &Activity, Option<&str>) -> Vec<RuleVerdict>,
+}
+
+fn x_keys(specs: &[String]) -> Vec<String> {
+    specs.iter().map(|s| x_spec_key(s)).collect()
+}
+
+fn one(verdict: Option<RuleVerdict>) -> Vec<RuleVerdict> {
+    verdict.into_iter().collect()
+}
+
+/// Every mode in one table.
+fn mode_entry(mode: Mode) -> ModeEntry {
+    match mode {
+        Mode::CaScanner => ModeEntry {
+            activities: &[ActivityType::Post, ActivityType::Profile, ActivityType::Pin],
+            keys: |rule| x_keys(&rule.accounts),
+            matcher: match_ca_scanner,
+        },
+        Mode::Engagement => ModeEntry {
+            activities: &[ActivityType::Post],
+            keys: |rule| x_keys(std::slice::from_ref(&rule.reactor)),
+            matcher: |i, rule, a, _| match &a.kind {
+                ActivityKind::Post(post) => one(match_engagement(i, rule, post, &a.signals)),
+                _ => Vec::new(),
+            },
+        },
+        Mode::NewTweet => ModeEntry {
+            activities: &[ActivityType::Post, ActivityType::Profile],
+            keys: |rule| x_keys(&rule.accounts),
+            matcher: |i, rule, a, _| match &a.kind {
+                ActivityKind::Post(post) => one(match_new_tweet_post(i, rule, post, &a.signals)),
+                ActivityKind::Profile(profile) => one(match_new_tweet_bio(i, rule, profile, a)),
+                _ => Vec::new(),
+            },
+        },
+        Mode::Follow => ModeEntry {
+            activities: &[ActivityType::Follow],
+            keys: |rule| x_keys(&rule.accounts),
+            matcher: |i, rule, a, _| match &a.kind {
+                ActivityKind::Follow(follow) => one(match_follow(i, rule, follow, a)),
+                _ => Vec::new(),
+            },
+        },
+        Mode::PfpUpdate => ModeEntry {
+            activities: &[ActivityType::Profile],
+            keys: |rule| x_keys(&rule.accounts),
+            matcher: |i, rule, a, _| match &a.kind {
+                ActivityKind::Profile(profile) => one(match_pfp(i, rule, profile, a)),
+                _ => Vec::new(),
+            },
+        },
+        Mode::Callout => ModeEntry {
+            activities: &[ActivityType::Callout],
+            keys: |rule| rule.callers.iter().map(|c| format!("pf:{}", c.to_lowercase())).collect(),
+            matcher: |i, rule, a, _| match &a.kind {
+                ActivityKind::Callout(callout) => match_callout(i, rule, callout, a),
+                _ => Vec::new(),
+            },
+        },
+        Mode::Fomo => ModeEntry {
+            activities: &[ActivityType::Fomo],
+            keys: |rule| {
+                let mut keys: Vec<String> = rule.fomo_users.iter().map(|u| format!("fu:{}", u.to_lowercase())).collect();
+                keys.extend(rule.fomo_coins.iter().map(|c| format!("fc:{c}")));
+                keys
+            },
+            matcher: |i, rule, a, _| match &a.kind {
+                ActivityKind::Fomo(fomo) => match_fomo(i, rule, fomo, a),
+                _ => Vec::new(),
+            },
+        },
+    }
+}
+
+/// Returns the activity types a rule listens to and the account keys it listens under.
+pub fn listens(rule: &Rule) -> Vec<(ActivityType, String)> {
+    let entry = mode_entry(rule.mode);
+    let mut out = Vec::new();
+    for key in (entry.keys)(rule) {
+        for activity in entry.activities {
+            out.push((*activity, key.clone()));
+        }
+    }
+    out
+}
+
+/// Returns the verdicts of one rule for one activity, in signal order.
+pub fn match_rule(index: usize, rule: &Rule, activity: &Activity, known_bio: Option<&str>) -> Vec<RuleVerdict> {
+    (mode_entry(rule.mode).matcher)(index, rule, activity, known_bio)
 }

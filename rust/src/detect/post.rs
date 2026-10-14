@@ -11,11 +11,17 @@ use super::types::{Actor, Chain, Confidence, Namespace, PostActivity, PostTarget
 
 const MAX_REF_DEPTH: usize = 4;
 
-/// Returns the actor for a post author or account on the given platform: `x` on twitter, the
+/// Returns an account's effective platform: its own `platform`, else `fallback` (the event's or
+/// the outer account's effective platform).
+pub fn effective_platform<'a>(author: Option<&'a Author>, fallback: &'a str) -> &'a str {
+    author.and_then(|a| a.platform.as_deref()).unwrap_or(fallback)
+}
+
+/// Returns the actor for a post author or account: `x` when its effective platform is twitter, the
 /// platform name elsewhere.
-pub fn x_actor(author: Option<&Author>, platform: &str) -> Actor {
+pub fn x_actor(author: Option<&Author>, fallback: &str) -> Actor {
     Actor {
-        namespace: Namespace::for_platform(platform),
+        namespace: Namespace::for_platform(effective_platform(author, fallback)),
         id: author.and_then(|a| a.id.clone()),
         handle: normalize_handle(author.and_then(|a| a.handle.as_deref())),
     }
@@ -116,8 +122,11 @@ pub fn detect_meta_signals(meta: &TweetMeta, ctx: &SignalContext) -> Vec<Signal>
     first_per_mint(out)
 }
 
-/// Returns what the post's author did, for the engagement and new tweet modes.
-pub fn post_activity(post: &Post, post_key: &str, platform: &str) -> PostActivity {
+/// Returns what the post's author did, for the engagement and new tweet modes, or `None` until the
+/// post's kind is known. `platform` is the post author's effective platform; a referenced author
+/// without its own platform takes it.
+pub fn post_activity(post: &Post, post_key: &str, platform: &str) -> Option<PostActivity> {
+    let kind = post.kind.filter(|k| *k != crate::protocol::PostKind::Other)?;
     let mut texts = vec![vec![post.text.clone().unwrap_or_default()]];
     for level in ref_levels(post.reference.as_ref()) {
         let mut level_texts = Vec::new();
@@ -128,7 +137,7 @@ pub fn post_activity(post: &Post, post_key: &str, platform: &str) -> PostActivit
     }
     let target =
         post.reference.as_ref().map(|r| PostTarget { tweet_id: r.tweet_id.clone(), account: x_actor(r.author.as_ref(), platform) });
-    PostActivity { kind: post.kind.unwrap_or(crate::protocol::PostKind::Post), post_key: post_key.to_string(), target, texts }
+    Some(PostActivity { kind, post_key: post_key.to_string(), target, texts })
 }
 
 /// Keeps the first signal for each mint.

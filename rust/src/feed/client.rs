@@ -3,7 +3,7 @@
 //! Next: `feed/dedupe.rs` drops the second copy, then `pipeline.rs` routes the event.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
@@ -12,7 +12,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
-use crate::log::log;
+use crate::log::{log, unix_ms};
 use crate::protocol::Envelope;
 use crate::setup::env::product_link;
 
@@ -58,10 +58,6 @@ const AUTH_PING: &str = r#"{"op":"auth_ping"}"#;
 pub fn backoff_ms(attempt: u32, random: f64) -> u64 {
     let base = 30_000f64.min(500.0 * 2f64.powi(attempt.min(16) as i32));
     (base / 2.0 + random * (base / 2.0)).floor() as u64
-}
-
-fn wall_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
 /// Starts one connection that reconnects until aborted. A rejected key goes to `fatal`.
@@ -151,7 +147,7 @@ async fn session(stream: Stream, options: &FeedOptions, on_event: &EventHandler)
                     Some(Err(error)) => return error.to_string(),
                     None => return "closed".to_string(),
                 };
-                let receipt = Receipt { connection: options.name.clone(), wall_ms: wall_ms(), mono };
+                let receipt = Receipt { connection: options.name.clone(), wall_ms: unix_ms(), mono };
                 match serde_json::from_str::<Envelope>(text.as_str()) {
                     Ok(envelope) if envelope.v == Some(1) => on_event(&envelope, &receipt),
                     Ok(_) => {}

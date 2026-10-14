@@ -41,20 +41,14 @@ fn fee_config_value(older: (u64, u16), newer: (u64, u16)) -> Vec<u8> {
 }
 
 #[test]
-fn parse_mint_reads_authorities_supply_and_decimals() {
-    let info = parse_mint(&mint_bytes(true, false, &[])).unwrap();
-    assert!(info.mint_authority);
-    assert!(!info.freeze_authority);
-    assert_eq!(info.supply, 1_000_000_000_000_000);
-    assert_eq!(info.decimals, 6);
-    assert!(parse_mint(&mint_bytes(false, true, &[])).unwrap().freeze_authority);
+fn parse_mint_needs_the_whole_spl_layout() {
+    assert_eq!(parse_mint(&mint_bytes(true, false, &[])).unwrap().transfer_fee, None);
     assert!(parse_mint(&[0u8; 81]).is_none());
 }
 
 #[test]
 fn the_token_2022_transfer_fee_in_force_depends_on_the_epoch() {
     let info = parse_mint(&mint_bytes(false, false, &[(1, fee_config_value((0, 100), (900, 250))), (12, vec![0u8; 32])])).unwrap();
-    assert_eq!(info.extensions, vec![1, 12]);
     assert_eq!(transfer_fee_bps(info.transfer_fee.as_ref(), Some(850)), 100);
     assert_eq!(transfer_fee_bps(info.transfer_fee.as_ref(), Some(900)), 250);
     assert_eq!(transfer_fee_bps(info.transfer_fee.as_ref(), None), 250, "unknown epoch: the higher fee");
@@ -116,6 +110,7 @@ fn curve_quotes_take_pumps_fee_before_the_curve_price() {
         mayhem: false,
         cashback: false,
         sol_paired: true,
+        data_length: 115,
     };
     // Buy 0.01 SOL at 125 bps: 1e7 x 10000 / 10125 = 9876543 reaches the curve;
     // 1e15 x 9876543 / (3.2e10 + 9876543) = 308546738277.
@@ -139,7 +134,7 @@ fn parse_fee_config_reads_the_tiers_and_curve_fee_bps_picks_one_by_market_cap() 
         data[at + 32..at + 40].copy_from_slice(&creator.to_le_bytes());
     }
     let parsed = parse_fee_config(&data).unwrap();
-    assert_eq!(parsed[2].threshold, 10u128.pow(20), "u128 thresholds above 64 bits survive");
+    assert_eq!(parsed.get(2).unwrap().threshold, 10u128.pow(20), "u128 thresholds above 64 bits survive");
     let curve = |quote: u64| Curve {
         virtual_token_reserves: 1_000_000_000_000_000,
         virtual_quote_reserves: quote,
@@ -150,7 +145,77 @@ fn parse_fee_config_reads_the_tiers_and_curve_fee_bps_picks_one_by_market_cap() 
         mayhem: false,
         cashback: false,
         sol_paired: true,
+        data_length: 115,
     };
     assert_eq!(curve_fee_bps(&parsed, &curve(10_000_000_000)), 125, "10 SOL market cap: first tier");
     assert_eq!(curve_fee_bps(&parsed, &curve(32_000_000_000)), 95, "32 SOL market cap: second tier");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_epoch_reading_expires_after_a_minute_so_the_stricter_transfer_fee_applies() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use solana_sniper_bot::execute::cache::ChainCache;
+    use solana_sniper_bot::scenario::{ChainSpec, ScenarioNetwork};
+
+    let spec = ChainSpec {
+        sol_usd: 150.0,
+        priority_fee_micro_lamports: 0,
+        tip_floor_sol: 0.0,
+        block_height: 1_000,
+        epoch: 850,
+        fee_tiers: Vec::new(),
+        mints: std::collections::HashMap::new(),
+    };
+    let cache = Arc::new(ChainCache::default());
+    let tasks = cache.start(Arc::new(ScenarioNetwork::new(spec)), Duration::from_secs(1));
+    cache.ready().await;
+    assert_eq!(cache.epoch(), Some(850));
+    for task in tasks {
+        task.abort();
+    }
+    tokio::time::advance(Duration::from_secs(59)).await;
+    assert_eq!(cache.epoch(), Some(850), "still fresh");
+    tokio::time::advance(Duration::from_secs(2)).await;
+    assert_eq!(cache.epoch(), None, "a reading older than 60 s is not used");
+    assert_eq!(cache.block_height(), Some(1_000), "the height stays for display and rebroadcast cutoffs");
+}
+
+#[tokio::test(start_paused = true)]
+async fn fee_tiers_older_than_five_minutes_become_the_single_highest_fee_tier() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use solana_sniper_bot::execute::cache::ChainCache;
+    use solana_sniper_bot::scenario::{ChainSpec, FeeTierSpec, ScenarioNetwork};
+
+    let tier = |threshold: &str, protocol_fee_bps: u64, creator_fee_bps: u64| FeeTierSpec {
+        market_cap_lamports_threshold: threshold.to_string(),
+        protocol_fee_bps,
+        creator_fee_bps,
+    };
+    let spec = ChainSpec {
+        sol_usd: 150.0,
+        priority_fee_micro_lamports: 0,
+        tip_floor_sol: 0.0,
+        block_height: 1_000,
+        epoch: 850,
+        fee_tiers: vec![tier("0", 95, 30), tier("20000000000", 90, 5), tier("100000000000", 50, 5)],
+        mints: std::collections::HashMap::new(),
+    };
+    let cache = Arc::new(ChainCache::default());
+    let tasks = cache.start(Arc::new(ScenarioNetwork::new(spec)), Duration::from_secs(1));
+    while cache.fee_tiers().is_none() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    for task in tasks {
+        task.abort();
+    }
+    assert_eq!(cache.fee_tiers().unwrap().get(2).unwrap().protocol_bps, 50, "fresh: every tier");
+    tokio::time::advance(Duration::from_secs(301)).await;
+    let stale = cache.fee_tiers().unwrap();
+    let only = stale.get(0).unwrap();
+    assert_eq!((only.threshold, only.protocol_bps, only.creator_bps), (0, 95, 30), "the highest fee, from a market cap of 0");
+    assert!(stale.get(1).is_none());
 }

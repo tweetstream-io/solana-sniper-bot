@@ -1,69 +1,102 @@
 //! Runs fired rules as trades. For one buy, top to bottom: reserve in the trade book, then
-//! `filters/gate.rs`, then build and sign (pump.fun locally, PumpPortal, or Jupiter), then record
-//! `sending` on disk, then send (`land/land.rs`, or Jupiter `/execute`), then resolve. Sells and the
-//! reconciler, which finishes trades whose outcome was unknown, follow the same steps. State rules
-//! live in `execute/trades.rs`.
+//! `filters/gate.rs`, then build and sign (pump.fun locally, or Jupiter for everything else), then
+//! write the pending trade to disk, then send (`land/land.rs`, or Jupiter `/execute`), then record
+//! the outcome. Sells and the reconciler, which finishes trades whose outcome was unknown, follow
+//! the same steps. State rules live in `execute/trades.rs`.
 
 use std::collections::HashSet;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use rand::RngExt;
-use serde_json::json;
+use serde::Deserialize;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_hash::Hash;
-use solana_instruction::{AccountMeta, Instruction};
+use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_message::{VersionedMessage, v0};
 use solana_pubkey::Pubkey;
+use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 use tokio::task::JoinHandle;
 
 use crate::execute::cache::ChainCache;
 use crate::execute::pump::{
-    bonding_curve_address, buy_instructions, curve_fee_bps, lamports_for_tokens, local_build_blocker, parse_curve, sell_instruction,
-    tokens_for_lamports, with_slippage,
+    WSOL_MINT, bonding_curve_address, buy_instructions, curve_fee_bps, lamports_for_tokens, parse_curve, sell_instruction,
+    tokens_for_lamports, unsupported_curve, with_slippage,
 };
 use crate::execute::trades::{
-    BuyRequest, ExitIntent, ExitTarget, Outcome, Position, PositionRoute, Sent, Side, Trade, TradeBook, TradeRoute, Trigger,
-    sol_to_lamports,
+    BuyRequest, ExitTarget, Pending, PendingExit, ReserveError, Sent, Ticket, TradeBook, TradeOutcome, TradeRoute, Trigger, sol_to_lamports,
 };
-use crate::filters::gate::{GateDeps, GateResult, Route, Verdict, run_gate};
+use crate::filters::gate::{GateDeps, GateResult, GateVerdict, run_gate};
 use crate::land::land::{Lander, SenderKind, SenderTarget, Status};
-use crate::log::{log, short};
-use crate::network::{Network, OrderRequest, WSOL};
+use crate::log::{log, short, unix_ms, wire_name};
+use crate::network::{Network, OrderRequest};
 use crate::report::latency::{LatencyReport, Trace};
 use crate::rules::modes::Fire;
-use crate::setup::config::{Config, FeeSetting, PumpBuilder, Rule};
+use crate::setup::config::{Config, FeeSetting, Rule};
 
-/// Jito tip accounts, as listed by `getTipAccounts` in <https://docs.jito.wtf/lowlatencytxnsend/>.
-/// Jito says they do not change, so they are not fetched at startup.
-const JITO_TIP_ACCOUNTS: [Pubkey; 8] = [
-    Pubkey::from_str_const("96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5"),
-    Pubkey::from_str_const("HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe"),
-    Pubkey::from_str_const("Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY"),
-    Pubkey::from_str_const("ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49"),
-    Pubkey::from_str_const("DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh"),
-    Pubkey::from_str_const("ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt"),
-    Pubkey::from_str_const("DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL"),
-    Pubkey::from_str_const("3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT"),
-];
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JupiterCodes {
+    landed: Vec<i64>,
+    rejected: Vec<i64>,
+}
 
-/// Largest costs a buy can add to its principal, for the spend reservation: the signature fee,
-/// rent for a Token-2022 token account with ImmutableOwner (170 bytes), and rent for pump.fun's
-/// per-user volume accumulator (137 bytes, 0.0018444 SOL in `TRADE_V3.md`). Rent is
-/// (bytes + 128) x 6960.
-const SIGNATURE_FEE: i128 = 5_000;
-const TOKEN_ACCOUNT_RENT: i128 = 2_074_080;
-const VOLUME_ACCUMULATOR_RENT: i128 = 1_844_400;
+/// The values both bots load from `shared/trading.json`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Trading {
+    jito_tip_accounts: Vec<String>,
+    jupiter_execute_codes: JupiterCodes,
+}
+
+static TRADING: LazyLock<(Vec<Pubkey>, JupiterCodes)> = LazyLock::new(|| {
+    let trading: Trading = serde_json::from_str(include_str!("../../../shared/trading.json")).expect("shared/trading.json is valid");
+    let tips = trading.jito_tip_accounts.iter().map(|a| a.parse().expect("shared/trading.json tip accounts are pubkeys")).collect();
+    (tips, trading.jupiter_execute_codes)
+});
+
+/// Fee per signature.
+const SIGNATURE_FEE: u64 = 5_000;
+/// Rent for a Token-2022 token account with ImmutableOwner (170 bytes) and for pump.fun's per-user
+/// volume accumulator (137 bytes, 0.0018444 SOL in `TRADE_V3.md`); rent is (bytes + 128) x 6960.
+const TOKEN_ACCOUNT_RENT: u64 = 2_074_080;
+const VOLUME_ACCUMULATOR_RENT: u64 = 1_844_400;
+/// A buy grows an older, shorter curve account to this length and pays the rent difference.
+const CURVE_FULL_LENGTH: u64 = 115;
+const RENT_PER_BYTE: u64 = 6_960;
 /// Jito ignores smaller tips.
-const JITO_MIN_TIP: i128 = 1_000;
-/// Jupiter `/execute` codes that reject a transaction before it can land.
-const JUPITER_REJECTED: [i64; 9] = [-1, -2, -3, -1002, -1003, -1004, -2002, -2003, -2004];
+const JITO_MIN_TIP: u64 = 1_000;
+/// Rebroadcasts stop this many blocks after a blockhash whose own window is not known.
+const FALLBACK_VALIDITY_BLOCKS: u64 = 150;
+/// The reconciler's period.
+const RECONCILE_EVERY: Duration = Duration::from_secs(2);
+
+/// What a Jupiter `/execute` code means, from `shared/trading.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JupiterCode {
+    /// It landed.
+    Landed,
+    /// Refused before landing; nothing was debited.
+    Rejected,
+    /// Anything else: check the chain later.
+    Unknown,
+}
+
+/// Classifies a Jupiter `/execute` code.
+pub fn jupiter_code(code: i64) -> JupiterCode {
+    let codes = &TRADING.1;
+    if codes.landed.contains(&code) {
+        JupiterCode::Landed
+    } else if codes.rejected.contains(&code) {
+        JupiterCode::Rejected
+    } else {
+        JupiterCode::Unknown
+    }
+}
 
 /// A signed transaction and its wire bytes.
 #[derive(Debug, Clone)]
@@ -75,24 +108,25 @@ pub struct Signed {
 }
 
 impl Signed {
-    /// Returns the fee payer's signature in base58.
-    pub fn signature(&self) -> String {
-        self.transaction.signatures.first().map(ToString::to_string).unwrap_or_default()
+    /// Returns the first signature (the transaction id) in base58, or `None` while that slot is
+    /// unsigned (a Jupiter market maker signs during `/execute`).
+    pub fn signature(&self) -> Option<String> {
+        self.transaction.signatures.first().filter(|s| **s != Signature::default()).map(ToString::to_string)
     }
 }
 
 /// Signs a message for the wallet, at the wallet's place among the required signers, keeping any
-/// other signer's slot (a Jupiter market maker signs during `/execute`).
+/// other signer's slot.
 ///
 /// # Errors
 ///
 /// Returns why when the wallet is not a required signer or the transaction cannot be encoded.
-pub fn sign(message: VersionedMessage, mut signatures: Vec<solana_signature::Signature>, wallet: &Keypair) -> Result<Signed, String> {
+pub fn sign(message: VersionedMessage, mut signatures: Vec<Signature>, wallet: &Keypair) -> Result<Signed, String> {
     let required = usize::from(message.header().num_required_signatures);
     let Some(index) = message.static_account_keys().iter().take(required).position(|k| *k == wallet.pubkey()) else {
         return Err("the wallet is not a signer of this transaction".to_string());
     };
-    signatures.resize(required, solana_signature::Signature::default());
+    signatures.resize(required, Signature::default());
     signatures[index] = wallet.sign_message(&message.serialize());
     let transaction = VersionedTransaction { signatures, message };
     let bytes = wincode::serialize(&transaction).map_err(|e| format!("encode: {e}"))?;
@@ -109,29 +143,46 @@ pub fn compile_and_sign(wallet: &Keypair, instructions: &[Instruction], blockhas
     sign(VersionedMessage::V0(message), Vec::new(), wallet)
 }
 
-/// One tip to an extra sender.
-#[derive(Debug, Clone)]
-struct SenderTip {
-    name: String,
-    account: Pubkey,
-    lamports: i128,
+/// What one transaction pays besides its principal.
+#[derive(Debug, Clone, Copy)]
+struct FeePlan {
+    units: u32,
+    micro_lamports: u64,
+    jito_tip: u64,
 }
 
-/// What one transaction pays besides its principal, and so where it may be sent.
-#[derive(Debug, Clone)]
-struct FeePlan {
-    priority_lamports: i128,
-    jito_tip: i128,
-    sender_tips: Vec<SenderTip>,
+impl FeePlan {
+    fn priority_lamports(&self) -> u64 {
+        (u128::from(self.micro_lamports) * u128::from(self.units)).div_ceil(1_000_000) as u64
+    }
+}
+
+/// The hard maximum wallet debit of a locally built pump.fun buy: principal, signature fee, priority
+/// fee, Jito tip, token account and volume accumulator rent, and the curve's rent top-up.
+fn pump_max_debit(principal: u64, plan: &FeePlan, curve_length: usize) -> u64 {
+    let top_up = CURVE_FULL_LENGTH.saturating_sub(curve_length as u64) * RENT_PER_BYTE;
+    principal + SIGNATURE_FEE + plan.priority_lamports() + plan.jito_tip + TOKEN_ACCOUNT_RENT + VOLUME_ACCUMULATOR_RENT + top_up
 }
 
 /// A signed transaction ready to record and send.
 struct Built {
     signed: Signed,
-    last_valid_block_height: u64,
+    blockhash: String,
+    last_valid_block_height: Option<u64>,
     route: TradeRoute,
     targets: Vec<SenderTarget>,
     request_id: Option<String>,
+    /// A buy's hard maximum wallet debit; 0 for sells.
+    max_debit: u64,
+    /// What a buy spends on the token; 0 for sells.
+    amount: u64,
+}
+
+/// A buy reserved in the trade book, with the fees its reservation was computed for.
+#[derive(Debug, Clone)]
+pub struct ReservedBuy {
+    ticket: Ticket,
+    plan: FeePlan,
 }
 
 /// What a sell attempt did.
@@ -139,17 +190,17 @@ struct Built {
 pub enum SellResult {
     /// The sell landed (or the dry run recorded it).
     Sold,
-    /// Sent, outcome not landed.
+    /// Sent, not landed.
     Sent,
     /// Nothing to sell.
     NoPosition,
-    /// An earlier sell is unresolved.
+    /// Another trade of the mint is in flight.
     Busy,
     /// Built or recorded nothing.
     NotSent,
 }
 
-/// Gives a fire back to the rule engine when nothing of it was sent.
+/// Gives a fire back to the rule engine when the buy bought nothing.
 pub type ReleaseFire = Arc<dyn Fn(&Fire) + Send + Sync>;
 
 /// What the trader works with.
@@ -170,433 +221,315 @@ pub struct TraderDeps<N> {
     pub dry_run: bool,
     /// `None` in dry run.
     pub lander: Option<Lander>,
-    /// Every configured sender; each transaction picks its subset.
+    /// Every RPC URL and, when configured, Jito.
     pub senders: Vec<SenderTarget>,
-    /// Called once for a fire that sent nothing.
+    /// Called once for a fire that bought nothing.
     pub release_fire: ReleaseFire,
+}
+
+/// Marks a trade as driven by this task until dropped, so the reconciler leaves it alone. Dropping
+/// it on any path, cancellation included, hands the trade to the reconciler.
+struct Inflight<'a> {
+    set: &'a Mutex<HashSet<String>>,
+    id: String,
+}
+
+impl<'a> Inflight<'a> {
+    fn new(set: &'a Mutex<HashSet<String>>, id: &str) -> Inflight<'a> {
+        set.lock().unwrap_or_else(|p| p.into_inner()).insert(id.to_string());
+        Inflight { set, id: id.to_string() }
+    }
+}
+
+impl Drop for Inflight<'_> {
+    fn drop(&mut self) {
+        self.set.lock().unwrap_or_else(|p| p.into_inner()).remove(&self.id);
+    }
 }
 
 /// Runs buys, sells, exits, and the reconciler.
 pub struct Trader<N> {
     d: TraderDeps<N>,
     inflight: Mutex<HashSet<String>>,
+    unreviewed: Mutex<HashSet<String>>,
 }
-
-fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
-}
-
-type Boxed<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 impl<N: Network> Trader<N> {
     /// Creates the trader.
     pub fn new(d: TraderDeps<N>) -> Trader<N> {
-        Trader { d, inflight: Mutex::new(HashSet::new()) }
+        Trader { d, inflight: Mutex::new(HashSet::new()), unreviewed: Mutex::new(HashSet::new()) }
     }
 
-    /// Reserves, checks, builds, signs, records, and sends one buy.
-    pub async fn buy(&self, fire: Fire, mut trace: Trace) {
-        let TraderDeps { book, config, dry_run, .. } = &self.d;
+    /// Reserves a buy for a fire, synchronously, so an exit for the mint that arrives before the
+    /// buy lands finds it. Returns `None`, with the fire released, when the buy is refused.
+    pub fn reserve_buy(&self, fire: &Fire, trace: &Trace) -> Option<ReservedBuy> {
+        let TraderDeps { book, config, .. } = &self.d;
         let rule = &config.rules[fire.rule];
         let plan = self.fee_plan(rule);
+        let trigger = Trigger { event_ref: trace.event_ref.clone(), post_key: fire.signal.as_ref().and_then(|s| s.post_key.clone()) };
+        let request = BuyRequest { mint: &fire.mint, rule: &rule.name, trigger, now: unix_ms() };
+        match book.reserve_buy(request) {
+            Ok(ticket) => Some(ReservedBuy { ticket, plan }),
+            Err(reason) => {
+                self.skip(fire, &reason.to_string(), trace);
+                None
+            }
+        }
+    }
+
+    /// Checks, builds, signs, records, and sends one reserved buy.
+    pub async fn buy(&self, fire: Fire, reserved: ReservedBuy, mut trace: Trace) {
+        let TraderDeps { book, config, dry_run, cache, .. } = &self.d;
+        let ReservedBuy { ticket, plan } = reserved;
+        let rule = &config.rules[fire.rule];
         let principal = sol_to_lamports(rule.token.amount_sol);
-        let fee_budget = plan_cost(&plan) + TOKEN_ACCOUNT_RENT + VOLUME_ACCUMULATOR_RENT;
-        let trigger = Trigger {
-            rule: rule.name.clone(),
-            fire_key: fire.fire_key.clone(),
-            event_ref: trace.event_ref.clone(),
-            post_key: fire.signal.as_ref().and_then(|s| s.post_key.clone()),
-            actor: fire.actor.clone(),
-        };
-        let reserved = book.reserve_buy(BuyRequest {
-            mint: &fire.mint,
-            trigger,
-            route: if *dry_run { TradeRoute::DryRun } else { TradeRoute::Pump },
-            max_debit: principal + fee_budget,
-            fee_budget,
-            caps: &config.spend,
-            skip_if_already_bought: rule.filters.skip_if_already_bought,
-            skip_if_already_holding: rule.filters.skip_if_already_holding,
-            now: now_ms(),
-        });
-        let trade = match reserved {
-            Ok(trade) => trade,
-            Err(reason) => return self.drop_fire(&fire, &reason, &trace),
-        };
         let Ok(mint) = fire.mint.parse::<Pubkey>() else {
-            book.fail_before_send(&trade.id, "not a Solana address");
-            return self.drop_fire(&fire, "not a Solana address", &trace);
+            book.cancel(&ticket);
+            return self.skip(&fire, "not a Solana address", &trace);
         };
-        let deps = GateDeps {
-            safety: &config.safety,
-            pump_builder: config.execution.pump_builder,
-            sol_usd: self.d.cache.sol_usd(),
-            epoch: self.d.cache.epoch(),
-            wallet: self.d.wallet.pubkey(),
-        };
+        let deps = GateDeps { safety: &config.safety, sol_usd: cache.sol_usd(), epoch: cache.epoch(), wallet: self.d.wallet.pubkey() };
         let gate = run_gate(self.d.network.as_ref(), &mint, rule, fire.signal.as_ref(), &deps).await;
         trace.gate_done = Some(Instant::now());
         trace.gate = Some(gate.elapsed);
-        if let Verdict::Fail { code, detail } = &gate.verdict {
-            let reason = format!("{}: {detail}", code.as_str());
-            book.fail_before_send(&trade.id, &reason);
-            return self.drop_fire(&fire, &reason, &trace);
-        }
-        let sent = self.attempt_buy(&fire, trade, gate, plan, principal, trace, rule.fees.retries_on_graduation).await;
-        if !sent {
-            (self.d.release_fire)(&fire);
-        }
-    }
-
-    /// One attempt, and a graduation retry if the curve completed under it. Returns whether any
-    /// transaction was sent (a dry run counts as sent); the fire is released only when none was.
-    #[expect(clippy::too_many_arguments, reason = "one attempt's inputs, passed again to the retry")]
-    fn attempt_buy<'a>(
-        &'a self,
-        fire: &'a Fire,
-        trade: Trade,
-        gate: GateResult,
-        plan: FeePlan,
-        principal: i128,
-        mut trace: Trace,
-        retries: u32,
-    ) -> Boxed<'a, bool> {
-        Box::pin(async move {
-            let TraderDeps { book, config, dry_run, cache, .. } = &self.d;
-            let rule = &config.rules[fire.rule];
-            let Verdict::Pass { route, token_program } = gate.verdict else {
-                return false;
-            };
-            let position_route = match route {
-                Route::Jupiter => PositionRoute::Jupiter,
-                Route::Pump(_) | Route::Pumpportal(_) => PositionRoute::Pump,
-            };
-            let position = |token_amount: Option<u64>| Position {
-                mint: fire.mint.clone(),
-                route: position_route,
-                token_program: token_program.to_string(),
-                opened_at: now_ms(),
-                buy_trade_id: trade.id.clone(),
-                cost_lamports: principal,
-                token_amount: token_amount.map(|t| t.to_string()),
-                trigger: trade.trigger.clone(),
-                sell_trade_id: None,
-            };
-            if *dry_run && route == Route::Jupiter {
-                let what = format!(
-                    "{}: would buy {} for {} SOL through Jupiter /order and /execute{}",
-                    rule.name,
-                    short(&fire.mint),
-                    rule.token.amount_sol,
-                    describe_facts(&gate)
-                );
-                log("dry run", &what);
-                let intents = book.confirm_dry_run(&trade.id, now_ms()).unwrap_or_default();
-                book.open_position(position(None));
-                self.d.report.finish(&trace, "dry run, not built");
-                self.run_intents(&fire.mint, intents).await;
-                return true;
+        let (curve, token_program) = match &gate.verdict {
+            GateVerdict::Pass { curve, token_program } => (*curve, *token_program),
+            GateVerdict::Fail { code, detail } => {
+                book.cancel(&ticket);
+                return self.skip(&fire, &format!("{}: {detail}", wire_name(code)), &trace);
             }
-            let built = match self.build_buy(rule, &fire.mint, principal, route, token_program, &plan).await {
-                Ok(built) => built,
-                Err(error) => {
-                    book.fail_before_send(&trade.id, &format!("build failed: {error}"));
-                    log("skip", &format!("{} {}: build failed: {error}", rule.name, short(&fire.mint)));
-                    self.d.report.finish(&trace, "build failed, nothing sent");
-                    return false;
-                }
-            };
-            trace.signed = Some(Instant::now());
-            let what =
-                format!("{} buy of {} for {} SOL{}", built.route.as_str(), short(&fire.mint), rule.token.amount_sol, describe_facts(&gate));
-            if *dry_run {
-                log("dry run", &format!("{}: would send a signed {}-byte {what}", rule.name, built.signed.bytes.len()));
-                let intents = book.confirm_dry_run(&trade.id, now_ms()).unwrap_or_default();
-                let tokens = match (route, cache.fee_tiers()) {
-                    (Route::Pump(curve) | Route::Pumpportal(curve), Some(tiers)) => {
-                        Some(tokens_for_lamports(&curve, principal as u64, curve_fee_bps(&tiers, &curve)))
-                    }
-                    (Route::Pump(_) | Route::Pumpportal(_) | Route::Jupiter, _) => None,
-                };
-                book.open_position(position(tokens));
-                self.d.report.finish(&trace, "dry run, not sent");
-                self.run_intents(&fire.mint, intents).await;
-                return true;
-            }
-            let signature = built.signed.signature();
-            let built_route = built.route;
-            let Some(outcome) = self.send_recorded(&trade, built, &mut trace).await else {
-                return false;
-            };
-            log("send", &format!("{}: {what}, {signature} -> {}", rule.name, outcome.kind()));
-            let finished = match outcome.error() {
-                Some(error) => format!("buy {}: {error}", outcome.kind()),
-                None => format!("buy {}", outcome.kind()),
-            };
-            let intents = match book.resolve(&trade.id, outcome.clone(), now_ms()) {
-                Ok(intents) => intents,
-                Err(error) => {
-                    log("error", &error.0);
-                    Vec::new()
-                }
-            };
-            self.d.report.finish(&trace, &finished);
-            match outcome {
-                Outcome::Landed { token_amount, .. } => {
-                    book.open_position(position(token_amount));
-                    self.run_intents(&fire.mint, intents).await;
-                }
-                Outcome::Failed { .. } if built_route == TradeRoute::Pump && retries > 0 && self.graduated(&fire.mint).await => {
-                    log("retry", &format!("{} graduated during the buy; retrying through Jupiter", short(&fire.mint)));
-                    let retry = book.reserve_buy(BuyRequest {
-                        mint: &fire.mint,
-                        trigger: trade.trigger.clone(),
-                        route: TradeRoute::Jupiter,
-                        max_debit: trade.reserved_lamports,
-                        fee_budget: trade.fee_budget_lamports,
-                        caps: &config.spend,
-                        skip_if_already_bought: true,
-                        skip_if_already_holding: true,
-                        now: now_ms(),
-                    });
-                    if let Ok(retry) = retry {
-                        let gate = GateResult { verdict: Verdict::Pass { route: Route::Jupiter, token_program }, ..gate };
-                        self.attempt_buy(fire, retry, gate, plan, principal, trace, retries - 1).await;
-                    }
-                }
-                Outcome::Failed { .. } | Outcome::Expired | Outcome::Rejected { .. } | Outcome::Unknown { .. } => {}
-            }
-            true
-        })
-    }
-
-    async fn graduated(&self, mint: &str) -> bool {
-        let Ok(mint) = mint.parse::<Pubkey>() else {
-            return false;
         };
-        let accounts = self.d.network.get_accounts(&[bonding_curve_address(&mint).to_string()]).await.unwrap_or_default();
-        accounts.into_iter().next().flatten().and_then(|a| parse_curve(&a.data)).is_some_and(|c| c.complete)
-    }
-
-    async fn build_buy(
-        &self,
-        rule: &Rule,
-        mint: &str,
-        lamports: i128,
-        route: Route,
-        token_program: Pubkey,
-        plan: &FeePlan,
-    ) -> Result<Built, String> {
-        let wallet = &self.d.wallet;
-        let mint_key: Pubkey = mint.parse().map_err(|_| "not a Solana address".to_string())?;
-        match (route, self.d.cache.fee_tiers()) {
-            (Route::Pump(curve), Some(tiers)) => {
-                let tokens = tokens_for_lamports(&curve, lamports as u64, curve_fee_bps(&tiers, &curve));
-                let min_out = with_slippage(tokens, rule.fees.slippage_pct);
-                self.compile_local(rule, plan, buy_instructions(&wallet.pubkey(), &mint_key, &token_program, lamports as u64, min_out))
+        let Some(tiers) = cache.fee_tiers() else {
+            book.cancel(&ticket);
+            return self.skip(&fire, "not sent: pump.fun fee tiers are not loaded yet", &trace);
+        };
+        let tokens = tokens_for_lamports(&curve, principal, curve_fee_bps(&tiers, &curve));
+        let instructions =
+            buy_instructions(&self.d.wallet.pubkey(), &mint, &token_program, principal, with_slippage(tokens, rule.fees.slippage_pct));
+        let mut built = match self.compile_local(rule, &plan, instructions) {
+            Ok(built) => built,
+            Err(error) => {
+                book.cancel(&ticket);
+                return self.skip(&fire, &format!("not sent: {error}"), &trace);
             }
-            (Route::Pump(_) | Route::Pumpportal(_), _) => {
-                let body = json!({
-                    "publicKey": wallet.pubkey().to_string(), "action": "buy", "mint": mint, "amount": lamports as f64 / 1e9,
-                    "denominatedInSol": "true", "slippage": rule.fees.slippage_pct, "priorityFee": plan.priority_lamports as f64 / 1e9, "pool": "auto"
-                });
-                let bytes = self.d.network.pumpportal_tx(body).await.map_err(|e| e.0)?;
-                self.adopt_pumpportal(rule, plan, &bytes)
+        };
+        (built.max_debit, built.amount) = (pump_max_debit(principal, &plan, curve.data_length), principal);
+        trace.signed = Some(Instant::now());
+        let what = format!("pump buy of {} for {} SOL{}", short(&fire.mint), rule.token.amount_sol, describe_facts(&gate));
+        if *dry_run {
+            log("dry run", &format!("{}: would send a signed {}-byte {what}", rule.name, built.signed.bytes.len()));
+            let sent = dry_sent(&token_program, built.max_debit, built.amount);
+            if let Err(reason) = book.confirm_dry_run(&ticket, sent, Some(tokens), &config.spend, unix_ms()) {
+                return self.skip(&fire, &reason, &trace);
             }
-            (Route::Jupiter, _) => self.jupiter_built(WSOL, mint, lamports as u64).await,
+            return self.d.report.finish(&trace, "dry run, not sent");
+        }
+        let _inflight = Inflight::new(&self.inflight, &ticket.id);
+        let outcome = match self.send_recorded(&ticket, built, &token_program.to_string(), &mut trace).await {
+            Ok(outcome) => outcome,
+            Err(reason) => return self.skip(&fire, &format!("not sent: {reason}"), &trace),
+        };
+        log("send", &format!("{}: {what} -> {}", rule.name, outcome.kind()));
+        book.resolve(&ticket.id, &outcome, unix_ms());
+        self.d.report.finish(&trace, &finished("buy", &outcome));
+        if let TradeOutcome::NotLanded { .. } = outcome {
+            (self.d.release_fire)(&fire);
         }
     }
 
     /// Sells the whole position in a mint.
     pub async fn sell(&self, mint: &str, reason: &str) -> SellResult {
         let TraderDeps { book, dry_run, network, config, wallet, cache, .. } = &self.d;
-        let Some(position) = book.position(mint) else {
-            return SellResult::NoPosition;
-        };
-        let route = if *dry_run { TradeRoute::DryRun } else { TradeRoute::Pump };
-        let trade = match book.reserve_sell(mint, position.trigger.clone(), route, now_ms()) {
-            Ok(trade) => trade,
+        let ticket = match book.reserve_sell(mint, unix_ms()) {
+            Ok(ticket) => ticket,
+            Err(ReserveError::NoPosition) => return SellResult::NoPosition,
             Err(why) => {
                 log("exit", &format!("{}: not selling now ({why})", short(mint)));
-                return if why == "no position" { SellResult::NoPosition } else { SellResult::Busy };
+                return SellResult::Busy;
             }
+        };
+        let Some(position) = book.position(mint) else {
+            book.cancel(&ticket);
+            return SellResult::NoPosition;
         };
         if *dry_run {
             log("dry run", &format!("would sell {} ({reason})", short(mint)));
-            if let Err(error) = book.confirm_dry_run(&trade.id, now_ms()) {
-                log("error", &error.0);
-            }
-            return SellResult::Sold;
+            let sent = Sent {
+                route: TradeRoute::Pump,
+                signature: None,
+                blockhash: String::new(),
+                last_valid_block_height: None,
+                token_program: position.token_program.clone(),
+                reserved_lamports: 0,
+                amount_lamports: 0,
+            };
+            return match book.confirm_dry_run(&ticket, sent, None, &config.spend, unix_ms()) {
+                Ok(()) => SellResult::Sold,
+                Err(_) => SellResult::NotSent,
+            };
         }
-        let mut trace = Trace::new(mint, &format!("exit:{reason}"), "-", reason, None, now_ms(), Instant::now());
+        let mut trace = Trace::new(mint, &format!("exit:{reason}"), "-", reason, None, unix_ms(), Instant::now());
         trace.decided = Some(trace.received);
         let built: Result<Built, String> = async {
-            let tokens = match &position.token_amount {
-                Some(amount) => amount.parse::<u64>().unwrap_or(0),
+            let tokens = match position.token_amount {
+                Some(amount) => amount,
                 None => network.token_balance(&wallet.pubkey().to_string(), mint).await.map_err(|e| e.0)?,
             };
             if tokens == 0 {
                 return Err("token balance not known yet".to_string());
             }
-            let rule = config.rules.iter().find(|r| r.name == position.trigger.rule).unwrap_or(&config.rules[0]);
-            let plan = self.fee_plan(rule);
             let mint_key: Pubkey = mint.parse().map_err(|_| "not a Solana address".to_string())?;
+            let program: Pubkey = position.token_program.parse().map_err(|_| "token program is not a pubkey".to_string())?;
+            let rule = config.rules.iter().find(|r| r.name == position.rule).unwrap_or(&config.rules[0]);
+            let plan = self.fee_plan(rule);
             let accounts = network.get_accounts(&[bonding_curve_address(&mint_key).to_string()]).await.map_err(|e| e.0)?;
             let curve = accounts.into_iter().next().flatten().and_then(|a| parse_curve(&a.data));
             match (curve, cache.fee_tiers()) {
-                (Some(curve), Some(tiers)) if local_build_blocker(&curve).is_none() && config.execution.pump_builder == PumpBuilder::Local => {
-                    let min_out = with_slippage(lamports_for_tokens(&curve, tokens, curve_fee_bps(&tiers, &curve)), config.exits.sell_slippage_pct);
-                    let program: Pubkey = position.token_program.parse().map_err(|_| "token program is not a pubkey".to_string())?;
-                    self.compile_local(rule, &plan, vec![sell_instruction(&wallet.pubkey(), &mint_key, &program, tokens, min_out)])
+                (Some(curve), Some(tiers)) if !curve.complete && unsupported_curve(&curve).is_none() => {
+                    let quote = lamports_for_tokens(&curve, tokens, curve_fee_bps(&tiers, &curve));
+                    let min_out = with_slippage(quote, config.exits.sell_slippage_pct);
+                    let mut built =
+                        self.compile_local(rule, &plan, vec![sell_instruction(&wallet.pubkey(), &mint_key, &program, tokens, min_out)])?;
+                    built.max_debit = SIGNATURE_FEE + plan.priority_lamports() + plan.jito_tip;
+                    Ok(built)
                 }
-                (Some(curve), _) if !curve.complete => {
-                    let body = json!({
-                        "publicKey": wallet.pubkey().to_string(), "action": "sell", "mint": mint, "amount": "100%", "denominatedInSol": "false",
-                        "slippage": config.exits.sell_slippage_pct, "priorityFee": plan.priority_lamports as f64 / 1e9, "pool": "auto"
-                    });
-                    let bytes = network.pumpportal_tx(body).await.map_err(|e| e.0)?;
-                    self.adopt_pumpportal(rule, &plan, &bytes)
+                // Jupiter sets its own fee, so the reservation is the automatic priority fee ceiling.
+                _ => {
+                    let mut built = self.jupiter_built(mint, &WSOL_MINT.to_string(), tokens).await?;
+                    built.max_debit = SIGNATURE_FEE + sol_to_lamports(config.execution.max_auto_priority_fee_sol);
+                    Ok(built)
                 }
-                _ => self.jupiter_built(mint, WSOL, tokens).await,
             }
         }
         .await;
         let built = match built {
             Ok(built) => built,
             Err(error) => {
-                book.fail_before_send(&trade.id, &error);
+                book.cancel(&ticket);
                 log("exit", &format!("{}: sell not sent: {error}", short(mint)));
                 return SellResult::NotSent;
             }
         };
         trace.signed = Some(Instant::now());
-        let Some(outcome) = self.send_recorded(&trade, built, &mut trace).await else {
-            return SellResult::NotSent;
+        let _inflight = Inflight::new(&self.inflight, &ticket.id);
+        let outcome = match self.send_recorded(&ticket, built, &position.token_program, &mut trace).await {
+            Ok(outcome) => outcome,
+            Err(reason) => {
+                log("exit", &format!("{}: sell not sent: {reason}", short(mint)));
+                return SellResult::NotSent;
+            }
         };
-        if let Err(error) = book.resolve(&trade.id, outcome.clone(), now_ms()) {
-            log("error", &error.0);
-        }
-        let finished = match outcome.error() {
-            Some(error) => format!("sell {}: {error}", outcome.kind()),
-            None => format!("sell {}", outcome.kind()),
-        };
-        self.d.report.finish(&trace, &finished);
+        book.resolve(&ticket.id, &outcome, unix_ms());
+        self.d.report.finish(&trace, &finished("sell", &outcome));
         match outcome {
-            Outcome::Landed { .. } => SellResult::Sold,
-            Outcome::Failed { .. } | Outcome::Expired | Outcome::Rejected { .. } | Outcome::Unknown { .. } => SellResult::Sent,
+            TradeOutcome::Landed { .. } => SellResult::Sold,
+            TradeOutcome::Failed { .. } | TradeOutcome::NotLanded { .. } | TradeOutcome::Unknown { .. } => SellResult::Sent,
         }
     }
 
-    /// Exits a mint: sold now if there is a position, kept on the buy if the buy is pending.
-    pub async fn exit(&self, mint: &str, code: &str, detail: &str) {
-        match self.d.book.add_exit_intent(mint, code, detail, now_ms()) {
-            ExitTarget::Pending => {
-                log("exit", &format!("{}: {code} recorded on the pending buy; it sells when the buy lands", short(mint)))
-            }
-            ExitTarget::Position => {
-                self.sell(mint, code).await;
+    /// Sells a position whose exits are pending, once its token balance is known.
+    pub async fn run_exits(&self, mint: &str) {
+        let Some(position) = self.d.book.position(mint).filter(|p| !p.pending_exits.is_empty()) else {
+            return;
+        };
+        let codes: Vec<String> = position.pending_exits.iter().map(|e| wire_name(&e.code)).collect();
+        if position.token_amount.is_none() && !self.d.dry_run {
+            return log("exit", &format!("{}: waiting for the token balance before selling ({})", short(mint), codes.join(", ")));
+        }
+        self.sell(mint, &codes.join(", ")).await;
+    }
+
+    /// Records an exit for a mint and sells the position now. An exit for a pending buy waits on
+    /// it, and the position takes it over when the buy confirms.
+    pub async fn exit(&self, mint: &str, exit: PendingExit) {
+        let code = wire_name(&exit.code);
+        match self.d.book.add_exit(mint, exit) {
+            ExitTarget::Position => self.run_exits(mint).await,
+            ExitTarget::PendingBuy => {
+                log("exit", &format!("{}: {code} recorded on the pending buy; it sells once the buy confirms", short(mint)))
             }
             ExitTarget::None => {}
         }
     }
 
-    async fn run_intents(&self, mint: &str, intents: Vec<ExitIntent>) {
-        if intents.is_empty() {
-            return;
-        }
-        let codes: Vec<&str> = intents.iter().map(|i| i.code.as_str()).collect();
-        self.sell(mint, &codes.join(", ")).await;
-    }
-
-    /// Writes `sending` (signature, validity window, signed bytes) to disk before anything goes out.
-    /// Returns `None`, with the trade failed and nothing sent, when that write fails.
-    async fn send_recorded(&self, trade: &Trade, built: Built, trace: &mut Trace) -> Option<Outcome> {
-        let base64 = base64::engine::general_purpose::STANDARD.encode(&built.signed.bytes);
-        let mut names = Vec::new();
-        for target in &built.targets {
-            names.push(target.name.clone());
-        }
+    /// Writes the pending trade and its spend reservation to disk before anything goes out, then
+    /// sends it.
+    ///
+    /// # Errors
+    ///
+    /// Returns why nothing was sent: a spend cap, or the write failed.
+    async fn send_recorded(&self, ticket: &Ticket, built: Built, token_program: &str, trace: &mut Trace) -> Result<TradeOutcome, String> {
         let sent = Sent {
-            signature: built.signed.signature(),
-            last_valid_block_height: built.last_valid_block_height,
-            tx: base64.clone(),
             route: built.route,
-            senders: names,
+            signature: built.signed.signature(),
+            blockhash: built.blockhash.clone(),
+            last_valid_block_height: built.last_valid_block_height,
+            token_program: token_program.to_string(),
+            reserved_lamports: built.max_debit,
+            amount_lamports: built.amount,
         };
-        if let Err(error) = self.d.book.mark_sending(&trade.id, sent, now_ms()) {
-            self.d.book.fail_before_send(&trade.id, &format!("state write failed, not sent: {error}"));
-            log("error", &format!("{}: state write failed, transaction not sent: {error}", short(&trade.mint)));
-            return None;
-        }
-        self.inflight.lock().unwrap_or_else(|p| p.into_inner()).insert(trade.id.clone());
-        let outcome = match &built.request_id {
-            Some(request_id) => self.jupiter_execute(&built, &base64, request_id, trace).await,
+        self.d.book.mark_pending(ticket, sent, &self.d.config.spend, unix_ms())?;
+        Ok(match &built.request_id {
+            Some(request_id) => self.jupiter_execute(ticket, &built, request_id, trace).await,
             None => self.land_local(built, trace).await,
-        };
-        self.inflight.lock().unwrap_or_else(|p| p.into_inner()).remove(&trade.id);
-        Some(outcome)
+        })
     }
 
-    async fn land_local(&self, built: Built, trace: &mut Trace) -> Outcome {
-        let Some(lander) = &self.d.lander else {
-            return Outcome::Unknown { error: "no lander in dry run".to_string() };
+    async fn land_local(&self, built: Built, trace: &mut Trace) -> TradeOutcome {
+        let (Some(lander), Some(signature)) = (&self.d.lander, built.signed.signature()) else {
+            return TradeOutcome::Unknown { error: "no lander in dry run".to_string() };
         };
-        if built.targets.is_empty() {
-            return Outcome::Unknown { error: "no sender can take this transaction".to_string() };
-        }
-        let landing = lander.land(&built.signed, built.last_valid_block_height, built.targets).await;
+        let last_valid = built.last_valid_block_height.or_else(|| self.d.cache.block_height().map(|h| h + FALLBACK_VALIDITY_BLOCKS));
+        let landing = lander.land(&built.signed.bytes, &signature, last_valid, built.targets).await;
         trace.sent = Some(landing.sent);
         trace.first_ack = landing.first_ack;
         trace.first_ack_by = landing.first_ack_by.clone();
         trace.confirmed = landing.confirmed;
         match landing.status {
-            Status::Unknown(error) => Outcome::Unknown { error },
-            Status::Confirmed => {
-                Outcome::Landed { token_amount: None, spent_lamports: self.debit(&landing.signature).await, signature: None }
-            }
-            Status::Failed(error) => Outcome::Failed { error, spent_lamports: self.debit(&landing.signature).await },
+            Status::Unknown(error) => TradeOutcome::Unknown { error },
+            Status::Confirmed => TradeOutcome::Landed { token_amount: None, spent_lamports: self.debit(&signature).await },
+            Status::Failed(error) => TradeOutcome::Failed { error, spent_lamports: self.debit(&signature).await },
         }
     }
 
-    /// Jupiter lands the transaction itself. Code 0 is success; the rejection codes refuse it
-    /// before landing; any other code (-1000/-2000 "failed to land", -1001/-2001 "unknown error"), a
-    /// timeout, or an unreadable answer proves nothing either way.
-    async fn jupiter_execute(&self, built: &Built, base64: &str, request_id: &str, trace: &mut Trace) -> Outcome {
+    /// Jupiter lands the transaction itself; its code maps through `shared/trading.json`. A timeout
+    /// or an unreadable answer proves nothing, so the trade stays pending.
+    async fn jupiter_execute(&self, ticket: &Ticket, built: &Built, request_id: &str, trace: &mut Trace) -> TradeOutcome {
         trace.sent = Some(Instant::now());
+        let base64 = base64::engine::general_purpose::STANDARD.encode(&built.signed.bytes);
         let timeout = Duration::from_millis(self.d.config.execution.confirm_timeout_ms);
-        let result = match self.d.network.jupiter_execute(base64, request_id, timeout).await {
+        let result = match self.d.network.jupiter_execute(&base64, request_id, timeout).await {
             Ok(result) => result,
-            Err(error) => return Outcome::Unknown { error: error.0 },
+            Err(error) => return TradeOutcome::Unknown { error: error.0 },
         };
         let answered = Instant::now();
         (trace.first_ack, trace.confirmed, trace.first_ack_by) = (Some(answered), Some(answered), Some("jupiter".to_string()));
+        if let Some(signature) = &result.signature {
+            self.d.book.set_signature(&ticket.id, signature);
+        }
         let error = format!("Jupiter code {}{}", result.code, result.error.as_ref().map(|e| format!(": {e}")).unwrap_or_default());
-        if result.status == "Success" && result.code == 0 {
-            let signature = result.signature.unwrap_or_else(|| built.signed.signature());
-            let tokens =
-                result.total_output_amount.as_deref().and_then(|t| t.parse::<u64>().ok()).filter(|_| built.route == TradeRoute::Jupiter);
-            return Outcome::Landed { token_amount: tokens, spent_lamports: self.debit(&signature).await, signature: Some(signature) };
+        match jupiter_code(result.code) {
+            // A success must say so and name a signature to check on chain; anything less waits.
+            JupiterCode::Landed => match result.signature.or_else(|| built.signed.signature()) {
+                Some(signature) if result.status == "Success" => {
+                    TradeOutcome::Landed { token_amount: None, spent_lamports: self.debit(&signature).await }
+                }
+                Some(_) | None => TradeOutcome::Unknown { error: format!("{error}, status {}, no usable signature", result.status) },
+            },
+            JupiterCode::Rejected => TradeOutcome::NotLanded { error },
+            JupiterCode::Unknown => TradeOutcome::Unknown { error },
         }
-        if JUPITER_REJECTED.contains(&result.code) { Outcome::Rejected { error } } else { Outcome::Unknown { error } }
     }
 
-    async fn debit(&self, signature: &str) -> Option<i128> {
-        self.d.network.transaction_debit(signature, &self.d.wallet.pubkey().to_string()).await.ok().flatten()
+    async fn debit(&self, signature: &str) -> Option<u64> {
+        let debit = self.d.network.transaction_debit(signature, &self.d.wallet.pubkey().to_string()).await.ok().flatten()?;
+        u64::try_from(debit).ok()
     }
 
-    /// Fails every trade that was reserved but never sent before a restart, then reconciles now and
-    /// every 2 seconds. Abort the returned handle to stop.
+    /// Checks pending trades now and every 2 seconds. Abort the returned handle to stop.
     pub fn start(self: &Arc<Self>) -> JoinHandle<()> {
-        for trade in self.d.book.recover_after_restart() {
-            let side = match trade.side {
-                Side::Buy => "buy",
-                Side::Sell => "sell",
-            };
-            log("state", &format!("trade {} ({side} {}) was never sent; released", trade.id, short(&trade.mint)));
-        }
         let trader = Arc::clone(self);
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(2));
+            let mut ticker = tokio::time::interval(RECONCILE_EVERY);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 ticker.tick().await;
@@ -605,203 +538,125 @@ impl<N: Network> Trader<N> {
         })
     }
 
-    /// Finishes trades whose outcome is not known yet, rebroadcasts the ones still valid, and reads
-    /// token balances that are still missing.
+    /// Finishes pending trades whose outcome is known now, reads token balances that are still
+    /// missing, and sells positions with pending exits.
     pub async fn reconcile(&self) {
-        let TraderDeps { book, network, cache, .. } = &self.d;
-        for trade in book.unresolved() {
-            let Some(signature) = trade.signature.clone() else { continue };
-            if self.inflight.lock().unwrap_or_else(|p| p.into_inner()).contains(&trade.id) {
+        let TraderDeps { book, network, .. } = &self.d;
+        for pending in book.pending() {
+            if self.inflight.lock().unwrap_or_else(|p| p.into_inner()).contains(&pending.id) {
                 continue;
             }
-            let Ok(status) = network.signature_status(&signature).await else {
-                continue;
-            };
-            let height = cache.block_height();
-            let outcome = match (&status, height, trade.last_valid_block_height) {
-                (Some(status), _, _) if status.confirmed => match &status.err {
-                    Some(err) => Some(Outcome::Failed { error: err.to_string(), spent_lamports: self.debit(&signature).await }),
-                    None => Some(Outcome::Landed { token_amount: None, spent_lamports: self.debit(&signature).await, signature: None }),
-                },
-                (None, Some(height), Some(last_valid)) if height > last_valid => Some(Outcome::Expired),
-                _ => {
-                    if let (Some(tx), Some(lander)) = (&trade.tx, &self.d.lander) {
-                        let names = trade.senders.clone().unwrap_or_default();
-                        let targets = self.d.senders.iter().filter(|s| names.contains(&s.name)).cloned().collect();
-                        lander.rebroadcast(tx.clone(), targets).await;
-                    }
-                    None
-                }
-            };
-            let Some(outcome) = outcome else { continue };
-            let kind = outcome.kind();
-            let landed = matches!(outcome, Outcome::Landed { .. });
-            let intents = match book.resolve(&trade.id, outcome, now_ms()) {
-                Ok(intents) => intents,
-                Err(error) => {
-                    log("error", &error.0);
-                    continue;
-                }
-            };
-            let side = match trade.side {
-                Side::Buy => "buy",
-                Side::Sell => "sell",
-            };
-            log("reconcile", &format!("{side} {} {}: {kind}", short(&trade.mint), &signature[..signature.len().min(8)]));
-            if trade.side == Side::Buy && landed {
-                let owner = network
-                    .get_accounts(std::slice::from_ref(&trade.mint))
-                    .await
-                    .ok()
-                    .and_then(|a| a.into_iter().next().flatten())
-                    .map(|a| a.owner);
-                book.open_position(Position {
-                    mint: trade.mint.clone(),
-                    route: if trade.route == TradeRoute::Jupiter { PositionRoute::Jupiter } else { PositionRoute::Pump },
-                    token_program: owner.unwrap_or_default(),
-                    opened_at: now_ms(),
-                    buy_trade_id: trade.id.clone(),
-                    cost_lamports: trade.reserved_lamports - trade.fee_budget_lamports,
-                    token_amount: None,
-                    trigger: trade.trigger.clone(),
-                    sell_trade_id: None,
-                });
-                self.run_intents(&trade.mint, intents).await;
-            }
+            let Some(outcome) = self.find_outcome(&pending).await else { continue };
+            book.resolve(&pending.id, &outcome, unix_ms());
+            log("reconcile", &format!("{} {}: {}", wire_name(&pending.side), short(&pending.mint), outcome.kind()));
         }
         let wallet = self.d.wallet.pubkey().to_string();
-        for position in book.positions() {
-            if position.token_amount.is_some() {
-                continue;
-            }
+        for position in book.positions().into_iter().filter(|p| p.token_amount.is_none()) {
             let balance = network.token_balance(&wallet, &position.mint).await.unwrap_or(0);
-            if balance > 0 {
-                book.set_token_amount(&position.mint, balance);
+            book.set_token_amount(&position.mint, balance);
+        }
+        for position in book.positions_to_exit() {
+            self.run_exits(&position.mint).await;
+        }
+    }
+
+    /// Landed or failed once the signature is confirmed. Not landed only when the signature is not
+    /// found, the blockhash is no longer valid, and a second lookup still finds nothing: a
+    /// transaction can confirm between the first lookup and the blockhash check. `None` while it
+    /// may still land.
+    async fn find_outcome(&self, pending: &Pending) -> Option<TradeOutcome> {
+        let network = &self.d.network;
+        let Some(signature) = &pending.signature else {
+            if self.unreviewed.lock().unwrap_or_else(|p| p.into_inner()).insert(pending.id.clone()) {
+                log("reconcile", &manual_review(pending));
+            }
+            return None;
+        };
+        match self.lookup(signature).await {
+            Lookup::Confirmed(outcome) => return Some(outcome),
+            Lookup::Unconfirmed | Lookup::Failed => return None,
+            Lookup::NotFound => {}
+        }
+        if network.is_blockhash_valid(&pending.blockhash).await != Ok(false) {
+            return None;
+        }
+        match self.lookup(signature).await {
+            Lookup::Confirmed(outcome) => Some(outcome),
+            Lookup::NotFound => Some(TradeOutcome::NotLanded { error: "the signature is unknown and its blockhash expired".to_string() }),
+            Lookup::Unconfirmed | Lookup::Failed => None,
+        }
+    }
+
+    async fn lookup(&self, signature: &str) -> Lookup {
+        match self.d.network.signature_status(signature).await {
+            Err(_) => Lookup::Failed,
+            Ok(None) => Lookup::NotFound,
+            Ok(Some(status)) if !status.confirmed => Lookup::Unconfirmed,
+            Ok(Some(status)) => {
+                let spent = self.debit(signature).await;
+                Lookup::Confirmed(match status.err {
+                    Some(err) => TradeOutcome::Failed { error: err.to_string(), spent_lamports: spent },
+                    None => TradeOutcome::Landed { token_amount: None, spent_lamports: spent },
+                })
             }
         }
     }
 
     fn fee_plan(&self, rule: &Rule) -> FeePlan {
         let TraderDeps { cache, config, senders, .. } = &self.d;
-        let units = i128::from(config.execution.compute_unit_limit);
-        let priority_lamports = match rule.fees.priority_fee_sol {
-            FeeSetting::Sol(sol) => sol_to_lamports(sol),
+        let units = config.execution.compute_unit_limit;
+        let per_unit = |lamports: u64| (u128::from(lamports) * 1_000_000 / u128::from(units.max(1))) as u64;
+        let micro_lamports = match rule.fees.priority_fee_sol {
+            FeeSetting::Sol(sol) => per_unit(sol_to_lamports(sol)),
             FeeSetting::Auto(_) => {
-                let estimate = cache.priority_micro_lamports().map_or(0, |micro| i128::from(micro) * units / 1_000_000);
-                estimate.min(sol_to_lamports(config.execution.max_auto_priority_fee_sol))
+                cache.priority_micro_lamports().unwrap_or(0).min(per_unit(sol_to_lamports(config.execution.max_auto_priority_fee_sol)))
             }
         };
-        let jito_usable = rule.fees.anti_mev && senders.iter().any(|s| s.kind == SenderKind::Jito);
         let tip_sol = match rule.fees.tip_sol {
             FeeSetting::Sol(sol) => sol,
             FeeSetting::Auto(_) => cache.tip_floor_sol().unwrap_or(0.0).min(config.execution.max_auto_tip_sol),
         };
-        let jito_tip = if jito_usable { sol_to_lamports(tip_sol).max(JITO_MIN_TIP) } else { 0 };
-        let mut sender_tips = Vec::new();
-        if !rule.fees.anti_mev {
-            let mut rng = rand::rng();
-            for sender in &config.senders {
-                if sender.tip_accounts.is_empty() || sender.tip_sol <= 0.0 {
-                    continue;
-                }
-                let Ok(account) = sender.tip_accounts[rng.random_range(0..sender.tip_accounts.len())].parse() else { continue };
-                sender_tips.push(SenderTip { name: sender.name.clone(), account, lamports: sol_to_lamports(sender.tip_sol) });
-            }
-        }
-        FeePlan { priority_lamports, jito_tip, sender_tips }
+        let jito = rule.fees.anti_mev && senders.iter().any(|s| s.kind == SenderKind::Jito);
+        let jito_tip = if jito { sol_to_lamports(tip_sol).max(JITO_MIN_TIP) } else { 0 };
+        FeePlan { units, micro_lamports, jito_tip }
     }
 
-    /// With `antiMev`: Jito only, and only when the transaction carries its tip. Otherwise every RPC,
-    /// plus each tip-requiring sender whose tip the transaction carries.
-    fn targets_for(&self, rule: &Rule, plan: &FeePlan, tipped: bool) -> Vec<SenderTarget> {
-        let mut targets = Vec::new();
-        if rule.fees.anti_mev {
-            if tipped && plan.jito_tip > 0 {
-                targets.extend(self.d.senders.iter().filter(|s| s.kind == SenderKind::Jito).cloned());
-            }
-            return targets;
-        }
-        let paid: HashSet<&str> = if tipped { plan.sender_tips.iter().map(|t| t.name.as_str()).collect() } else { HashSet::new() };
-        targets.extend(
-            self.d.senders.iter().filter(|s| s.kind == SenderKind::Rpc && (!s.needs_tip || paid.contains(s.name.as_str()))).cloned(),
-        );
-        targets
-    }
-
-    fn tip_instructions(&self, plan: &FeePlan) -> Vec<Instruction> {
-        let from = self.d.wallet.pubkey();
-        let mut tips = Vec::new();
-        if plan.jito_tip > 0 {
-            let to = JITO_TIP_ACCOUNTS[rand::rng().random_range(0..JITO_TIP_ACCOUNTS.len())];
-            tips.push(solana_system_interface::instruction::transfer(&from, &to, plan.jito_tip as u64));
-        }
-        for tip in &plan.sender_tips {
-            tips.push(solana_system_interface::instruction::transfer(&from, &tip.account, tip.lamports as u64));
-        }
-        tips
-    }
-
-    /// Compute budget, the trade, then every tip, so one signed transaction suits every sender.
+    /// Compute budget, the trade, then the Jito tip when the rule sends through Jito.
     fn compile_local(&self, rule: &Rule, plan: &FeePlan, trade: Vec<Instruction>) -> Result<Built, String> {
+        let wanted = if rule.fees.anti_mev { SenderKind::Jito } else { SenderKind::Rpc };
+        let targets: Vec<SenderTarget> = self.d.senders.iter().filter(|s| s.kind == wanted).cloned().collect();
+        if targets.is_empty() && !self.d.dry_run {
+            return Err("antiMev sends only through Jito; set JITO_URL in .env or turn antiMev off".to_string());
+        }
         let Some(blockhash) = self.d.cache.fresh_blockhash() else {
             return Err("no fresh blockhash (the background refresh is failing)".to_string());
         };
         let hash: Hash = blockhash.blockhash.parse().map_err(|_| "cached blockhash is not base58".to_string())?;
-        let units = self.d.config.execution.compute_unit_limit;
         let mut instructions = vec![
-            ComputeBudgetInstruction::set_compute_unit_limit(units),
-            ComputeBudgetInstruction::set_compute_unit_price((plan.priority_lamports * 1_000_000 / i128::from(units)) as u64),
+            ComputeBudgetInstruction::set_compute_unit_limit(plan.units),
+            ComputeBudgetInstruction::set_compute_unit_price(plan.micro_lamports),
         ];
         instructions.extend(trade);
-        instructions.extend(self.tip_instructions(plan));
+        if plan.jito_tip > 0 {
+            let accounts = &TRADING.0;
+            let to = accounts[rand::rng().random_range(0..accounts.len())];
+            instructions.push(solana_system_interface::instruction::transfer(&self.d.wallet.pubkey(), &to, plan.jito_tip));
+        }
         let signed = compile_and_sign(&self.d.wallet, &instructions, hash)?;
         Ok(Built {
             signed,
-            last_valid_block_height: blockhash.last_valid_block_height,
+            blockhash: blockhash.blockhash,
+            last_valid_block_height: Some(blockhash.last_valid_block_height),
             route: TradeRoute::Pump,
-            targets: self.targets_for(rule, plan, true),
+            targets,
             request_id: None,
+            max_debit: 0,
+            amount: 0,
         })
     }
 
-    /// PumpPortal builds the trade. When its message uses no lookup tables we add our tips and our
-    /// fresh blockhash, which also gives a known validity window. Otherwise it goes out unchanged,
-    /// to senders that need no tip, with a window of 150 blocks from now as an upper bound.
-    fn adopt_pumpportal(&self, rule: &Rule, plan: &FeePlan, bytes: &[u8]) -> Result<Built, String> {
-        let original: VersionedTransaction =
-            wincode::deserialize(bytes).map_err(|e| format!("PumpPortal sent an unreadable transaction: {e}"))?;
-        let fresh = self.d.cache.fresh_blockhash();
-        let no_lookups = original.message.address_table_lookups().is_none_or(|l| l.is_empty());
-        if let (true, Some(blockhash)) = (no_lookups, fresh) {
-            let hash: Hash = blockhash.blockhash.parse().map_err(|_| "cached blockhash is not base58".to_string())?;
-            let mut instructions = decompile(&original.message);
-            instructions.extend(self.tip_instructions(plan));
-            let signed = compile_and_sign(&self.d.wallet, &instructions, hash)?;
-            let targets = self.targets_for(rule, plan, true);
-            return Ok(Built {
-                signed,
-                last_valid_block_height: blockhash.last_valid_block_height,
-                route: TradeRoute::Pumpportal,
-                targets,
-                request_id: None,
-            });
-        }
-        let Some(height) = self.d.cache.block_height() else {
-            return Err("block height unknown".to_string());
-        };
-        let VersionedTransaction { signatures, message } = original;
-        let signed = sign(message, signatures, &self.d.wallet)?;
-        Ok(Built {
-            signed,
-            last_valid_block_height: height + 150,
-            route: TradeRoute::Pumpportal,
-            targets: self.targets_for(rule, plan, false),
-            request_id: None,
-        })
-    }
-
-    /// Jupiter Swap V2 `/order` with the wallet as taker. Jupiter lands it through `/execute`, so the
-    /// bot's own senders are not used. The order's `lastValidBlockHeight` is the hard expiry.
+    /// Jupiter Swap V2 `/order` with the wallet as taker. Jupiter lands it through `/execute`, so
+    /// the bot's own senders are not used.
     async fn jupiter_built(&self, input_mint: &str, output_mint: &str, amount: u64) -> Result<Built, String> {
         let request = OrderRequest {
             input_mint: input_mint.to_string(),
@@ -811,67 +666,84 @@ impl<N: Network> Trader<N> {
         };
         let order = self.d.network.jupiter_order(request).await.map_err(|e| e.0)?;
         let Some(transaction) = order.transaction else {
-            return Err(format!(
-                "Jupiter /order returned no transaction: {}",
-                order.error_message.unwrap_or_else(|| "no route".to_string())
-            ));
+            let why = order.error_message.unwrap_or_else(|| "no route".to_string());
+            return Err(format!("Jupiter /order returned no transaction: {why}"));
         };
-        let last_valid =
-            order.last_valid_block_height.or_else(|| self.d.cache.block_height().map(|h| h + 150)).ok_or("block height unknown")?;
         let bytes =
             base64::engine::general_purpose::STANDARD.decode(transaction).map_err(|e| format!("Jupiter /order transaction: {e}"))?;
         let tx: VersionedTransaction = wincode::deserialize(&bytes).map_err(|e| format!("Jupiter /order transaction: {e}"))?;
         let VersionedTransaction { signatures, message } = tx;
+        let blockhash = message.recent_blockhash().to_string();
         let signed = sign(message, signatures, &self.d.wallet)?;
         Ok(Built {
             signed,
-            last_valid_block_height: last_valid,
+            blockhash,
+            last_valid_block_height: order.last_valid_block_height,
             route: TradeRoute::Jupiter,
             targets: Vec::new(),
             request_id: Some(order.request_id),
+            max_debit: 0,
+            amount: 0,
         })
     }
 
-    fn drop_fire(&self, fire: &Fire, reason: &str, trace: &Trace) {
+    /// Logs a buy that bought nothing and gives its fire back.
+    fn skip(&self, fire: &Fire, reason: &str, trace: &Trace) {
         (self.d.release_fire)(fire);
-        let rule = &self.d.config.rules[fire.rule];
-        log("skip", &format!("{} {}: {reason}", rule.name, short(&fire.mint)));
+        log("skip", &format!("{} {}: {reason}", self.d.config.rules[fire.rule].name, short(&fire.mint)));
         let code = reason.split(':').next().unwrap_or(reason);
         self.d.report.finish(trace, &format!("skipped ({code})"));
     }
 }
 
-fn plan_cost(plan: &FeePlan) -> i128 {
-    let mut cost = SIGNATURE_FEE + plan.priority_lamports + plan.jito_tip;
-    for tip in &plan.sender_tips {
-        cost += tip.lamports;
+fn finished(side: &str, outcome: &TradeOutcome) -> String {
+    match outcome.error() {
+        Some(error) => format!("{side} {}: {error}", outcome.kind()),
+        None => format!("{side} {}", outcome.kind()),
     }
-    cost
 }
 
-/// Turns a message without lookup tables back into instructions, with signer and writable flags
-/// from its header.
-fn decompile(message: &VersionedMessage) -> Vec<Instruction> {
-    let keys = message.static_account_keys();
-    let header = message.header();
-    let signed = usize::from(header.num_required_signatures);
-    let writable = |i: usize| {
-        if i < signed {
-            i < signed - usize::from(header.num_readonly_signed_accounts)
-        } else {
-            i < keys.len() - usize::from(header.num_readonly_unsigned_accounts)
-        }
-    };
-    let mut out = Vec::new();
-    for compiled in message.instructions() {
-        let mut accounts = Vec::new();
-        for &index in &compiled.accounts {
-            let i = usize::from(index);
-            accounts.push(AccountMeta { pubkey: keys[i], is_signer: i < signed, is_writable: writable(i) });
-        }
-        out.push(Instruction { program_id: keys[usize::from(compiled.program_id_index)], accounts, data: compiled.data.clone() });
+/// What a signature lookup found.
+enum Lookup {
+    /// The call failed.
+    Failed,
+    /// The RPC has not seen the signature.
+    NotFound,
+    /// Seen, not confirmed yet.
+    Unconfirmed,
+    /// Confirmed, with or without an error.
+    Confirmed(TradeOutcome),
+}
+
+/// What to do about a pending trade with no signature to follow.
+fn manual_review(pending: &Pending) -> String {
+    format!(
+        "trade {} ({} of {}) has no signature to follow and waits for you. Stop the bot and look up the wallet's \
+         transactions for this mint. If the sell landed, delete positions[\"{}\"] and pending[\"{}\"] in the same edit. If it \
+         did not, delete pending[\"{}\"] and subtract its reservedLamports ({}) from spend.totalLamports. Then start the bot again.",
+        pending.id,
+        wire_name(&pending.side),
+        pending.mint,
+        pending.mint,
+        pending.id,
+        pending.id,
+        pending.reserved_lamports
+    )
+}
+
+/// What a dry run records for a buy it does not send.
+fn dry_sent(token_program: &Pubkey, reserved_lamports: u64, amount_lamports: u64) -> Sent {
+    let token_program = token_program.to_string();
+    let route = TradeRoute::Pump;
+    Sent {
+        route,
+        signature: None,
+        blockhash: String::new(),
+        last_valid_block_height: None,
+        token_program,
+        reserved_lamports,
+        amount_lamports,
     }
-    out
 }
 
 fn describe_facts(gate: &GateResult) -> String {

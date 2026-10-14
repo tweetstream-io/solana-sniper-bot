@@ -44,24 +44,6 @@ pub enum SignalSource {
     Fomo,
 }
 
-impl SignalSource {
-    /// Returns the name used in config and logs.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SignalSource::Text => "text",
-            SignalSource::Url => "url",
-            SignalSource::Meta => "meta",
-            SignalSource::Ocr => "ocr",
-            SignalSource::Reference => "reference",
-            SignalSource::Pin => "pin",
-            SignalSource::Profile => "profile",
-            SignalSource::FollowBio => "follow_bio",
-            SignalSource::Callout => "callout",
-            SignalSource::Fomo => "fomo",
-        }
-    }
-}
-
 /// The chain an address belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -121,48 +103,18 @@ impl Serialize for Namespace {
     }
 }
 
-impl<'de> Deserialize<'de> for Namespace {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let name = String::deserialize(deserializer)?;
-        Ok(match name.as_str() {
-            "x" => Namespace::X,
-            "pump_fun" => Namespace::PumpFun,
-            "fomo" => Namespace::Fomo,
-            "none" => Namespace::None,
-            _ => Namespace::Platform(name),
-        })
-    }
-}
-
 /// Who acted. Post authors have an id and a handle, pump.fun callers a username, FOMO authors an id
 /// and a username. Token verifications have no actor.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Actor {
     /// Which kind of account.
     pub namespace: Namespace,
     /// Account id, when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     /// Handle or username without a leading `@`, when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub handle: Option<String>,
-}
-
-impl Actor {
-    /// Returns true when both name the same account: same namespace, then the same id when both
-    /// have one, else the same handle without case.
-    pub fn same_account(&self, other: &Actor) -> bool {
-        if self.namespace != other.namespace {
-            return false;
-        }
-        if let (Some(a), Some(b)) = (&self.id, &other.id) {
-            return a == b;
-        }
-        match (&self.handle, &other.handle) {
-            (Some(a), Some(b)) => a.to_lowercase() == b.to_lowercase(),
-            _ => false,
-        }
-    }
 }
 
 /// One contract address found in one event.
@@ -247,19 +199,6 @@ pub enum ProfileField {
     WebsiteUrl,
 }
 
-impl ProfileField {
-    /// Returns the protocol name of the field.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ProfileField::Avatar => "avatar",
-            ProfileField::Banner => "banner",
-            ProfileField::Name => "name",
-            ProfileField::Bio => "bio",
-            ProfileField::WebsiteUrl => "websiteUrl",
-        }
-    }
-}
-
 /// An account changed its profile.
 #[derive(Debug, Clone)]
 pub struct ProfileActivity {
@@ -292,16 +231,6 @@ impl CalloutKind {
             "reply" => Some(CalloutKind::Reply),
             "repost" => Some(CalloutKind::Repost),
             _ => None,
-        }
-    }
-
-    /// Returns the protocol name of the kind.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            CalloutKind::Callout => "callout",
-            CalloutKind::AuthorUpdate => "author_update",
-            CalloutKind::Reply => "reply",
-            CalloutKind::Repost => "repost",
         }
     }
 }

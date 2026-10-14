@@ -1,12 +1,13 @@
 //! Detectors for account events: follow and unfollow, profile updates, pins, pump.fun callouts,
 //! and FOMO theses and token verifications. Pure and synchronous. Next: `rules/engine.rs`.
 
+use crate::log::wire_name;
 use crate::protocol::{
     AccountCallout, AccountFollow, AccountProfileUpdate, AccountThesis, Field, FomoCoin, ProfileFields, TweetPin, normalize_handle,
 };
 
 use super::addresses::{FoundAddress, addresses_from_url, classify_address, find_addresses, find_all};
-use super::post::{SignalContext, first_per_mint, x_actor};
+use super::post::{SignalContext, effective_platform, first_per_mint, x_actor};
 use super::store::KnownProfile;
 use super::types::{
     Activity, ActivityKind, Actor, CalloutActivity, CalloutKind, CalloutOp, Confidence, FollowActivity, FollowOp, FomoActivity, FomoOp,
@@ -17,7 +18,12 @@ use super::types::{
 /// when the payload has it; this example does not call a profile lookup API.
 pub fn follow_activity(d: &AccountFollow, op: FollowOp, platform: &str, event_ref: &str) -> Activity {
     let actor = x_actor(Some(&d.actor), platform);
-    let target = Actor { namespace: Namespace::X, id: d.target.id.clone(), handle: normalize_handle(d.target.handle.as_deref()) };
+    let target_platform = effective_platform(Some(&d.target), effective_platform(Some(&d.actor), platform));
+    let target = Actor {
+        namespace: Namespace::for_platform(target_platform),
+        id: d.target.id.clone(),
+        handle: normalize_handle(d.target.handle.as_deref()),
+    };
     let mut found = find_all(d.target.bio.as_deref());
     if let Some(website) = &d.target.website_url {
         found.extend(addresses_from_url(website));
@@ -92,7 +98,7 @@ pub fn profile_activity(d: &AccountProfileUpdate, seen: Option<&KnownProfile>, p
                 (true, ProfileField::Avatar | ProfileField::Banner | ProfileField::Bio | ProfileField::WebsiteUrl) => Confidence::High,
             };
             let note = if prior_known { "" } else { " (no earlier value seen)" };
-            signals.push(ctx.signal(SignalSource::Profile, &found, confidence, format!("added to {}{note}", field.as_str())));
+            signals.push(ctx.signal(SignalSource::Profile, &found, confidence, format!("added to {}{note}", wire_name(&field))));
         }
     }
     let bio = changed.contains(&ProfileField::Bio).then(|| d.changes.bio.text().unwrap_or("").to_string());

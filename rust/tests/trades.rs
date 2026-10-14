@@ -1,37 +1,20 @@
-//! The trade state machine through its public methods: reservations, transitions, what survives a
-//! restart, and what the state file must look like.
+//! The trade book against real files: the lock, loading, one buy per mint, spend caps at the
+//! pending write, outcomes, and exits.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use serde_json::Value;
-use solana_sniper_bot::detect::types::{Actor, Namespace};
+use serde_json::{Value, json};
 use solana_sniper_bot::execute::trades::{
-    BuyRequest, ExitTarget, Mode, Outcome, Position, PositionRoute, Sent, Trade, TradeBook, TradeRoute, TradeState, Trigger,
+    BuyRequest, ExitReason, ExitTarget, Mode, PendingExit, ReserveError, Sent, Side, Ticket, TradeBook, TradeOutcome, TradeRoute, Trigger,
 };
 use solana_sniper_bot::setup::config::Spend;
 
 const MINT: &str = "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA";
 const OTHER: &str = "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29";
-const THIRD: &str = "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN";
+const TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
-fn caps() -> Spend {
-    Spend { max_per_trade_sol: 0.1, max_per_hour_sol: 0.25, max_total_sol: 0.25 }
-}
-
-fn trigger() -> Trigger {
-    let actor = Actor { namespace: Namespace::X, id: Some("111".to_string()), handle: None };
-    Trigger {
-        rule: "r".to_string(),
-        fire_key: "r|x".to_string(),
-        event_ref: "tweet/content twitter:1".to_string(),
-        post_key: Some("twitter:1".to_string()),
-        actor,
-    }
-}
-
-/// A state file in a fresh directory, removed when dropped.
+/// A fresh directory, removed when dropped.
 struct StateDir(PathBuf);
 
 impl StateDir {
@@ -42,288 +25,308 @@ impl StateDir {
         StateDir(dir)
     }
 
-    fn file(&self) -> PathBuf {
+    fn live(&self) -> PathBuf {
         self.0.join("live.json")
+    }
+
+    fn read(&self) -> Value {
+        serde_json::from_str(&fs::read_to_string(self.live()).unwrap()).unwrap()
     }
 }
 
 impl Drop for StateDir {
     fn drop(&mut self) {
-        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700));
-        let _ = fs::remove_dir_all(&self.0);
+        if let Err(error) = fs::remove_dir_all(&self.0) {
+            eprintln!("cannot remove {}: {error}", self.0.display());
+        }
     }
 }
 
-fn sent(id: &str) -> Sent {
+fn caps(per_trade: f64, per_hour: f64, total: f64) -> Spend {
+    Spend { max_per_trade_sol: per_trade, max_per_hour_sol: per_hour, max_total_sol: total }
+}
+
+fn wide() -> Spend {
+    caps(10.0, 10.0, 10.0)
+}
+
+fn reserve(book: &TradeBook, mint: &str, rule: &str) -> Result<Ticket, ReserveError> {
+    let trigger = Trigger { event_ref: "tweet/content twitter:1".to_string(), post_key: Some("twitter:1".to_string()) };
+    book.reserve_buy(BuyRequest { mint, rule, trigger, now: 1_000 })
+}
+
+fn sent(reserved: u64, amount: u64) -> Sent {
     Sent {
-        signature: format!("sig-{id}"),
-        last_valid_block_height: 1_000,
-        tx: "AAAA".to_string(),
         route: TradeRoute::Pump,
-        senders: vec!["rpc".to_string()],
+        signature: Some("sig".to_string()),
+        blockhash: "hash".to_string(),
+        last_valid_block_height: Some(1_150),
+        token_program: TOKEN_PROGRAM.to_string(),
+        reserved_lamports: reserved,
+        amount_lamports: amount,
     }
 }
 
-fn request<'a>(mint: &'a str, max_debit: i128, skip_if_already_bought: bool, now: i64, caps: &'a Spend) -> BuyRequest<'a> {
-    BuyRequest {
-        mint,
-        trigger: trigger(),
-        route: TradeRoute::Pump,
-        max_debit,
-        fee_budget: 10_000_000,
-        caps,
-        skip_if_already_bought,
-        skip_if_already_holding: true,
-        now,
+fn landed(spent: Option<u64>) -> TradeOutcome {
+    TradeOutcome::Landed { token_amount: Some(500), spent_lamports: spent }
+}
+
+/// Reserves, writes pending, and lands a buy of `mint` for 14,000,000 lamports reserved.
+fn bought(book: &TradeBook, mint: &str) -> Ticket {
+    let ticket = reserve(book, mint, "dev").unwrap();
+    book.mark_pending(&ticket, sent(14_000_000, 10_000_000), &wide(), 1_000).unwrap();
+    book.resolve(&ticket.id, &landed(Some(12_000_000)), 2_000);
+    ticket
+}
+
+#[test]
+fn a_second_process_cannot_open_a_state_file_in_use_and_a_closed_book_releases_it() {
+    let dir = StateDir::new();
+    let first = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    let error = TradeBook::open(Some(&dir.live()), Mode::Live).err().expect("the lock is held").0;
+    assert!(error.contains(&format!("process {}, which is running", std::process::id())), "{error}");
+    first.close();
+    assert!(!dir.0.join("live.lock").exists());
+    TradeBook::open(Some(&dir.live()), Mode::Live).expect("free after close");
+}
+
+#[test]
+fn a_lock_left_behind_is_never_taken_over_and_the_message_names_its_owner() {
+    let dir = StateDir::new();
+    let lock = dir.0.join("live.lock");
+    let cases =
+        [(r#"{"pid": 2147483646, "startedAt": 1}"#, "process 2147483646, which is not running"), ("not json", "an unknown process")];
+    for (leftover, owner) in cases {
+        fs::write(&lock, leftover).unwrap();
+        let error = TradeBook::open(Some(&dir.live()), Mode::Live).err().expect("refused").0;
+        assert!(error.contains(owner) && error.contains("then delete"), "{error}");
+        assert_eq!(fs::read_to_string(&lock).unwrap(), leftover, "the lock is left as it was");
     }
-}
-
-fn buy(book: &TradeBook, now: i64) -> Trade {
-    let caps = caps();
-    book.reserve_buy(request(MINT, 60_000_000, true, now, &caps)).expect("the buy is reserved")
-}
-
-fn spent_total(path: &Path) -> String {
-    let state: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-    state["spend"]["totalLamports"].as_str().unwrap().to_string()
-}
-
-fn landed(token_amount: Option<u64>, spent_lamports: Option<i128>) -> Outcome {
-    Outcome::Landed { token_amount, spent_lamports, signature: None }
-}
-
-fn position(buy_trade_id: &str, trigger: Trigger) -> Position {
-    Position {
-        mint: MINT.to_string(),
-        route: PositionRoute::Pump,
-        token_program: String::new(),
-        opened_at: 0,
-        buy_trade_id: buy_trade_id.to_string(),
-        cost_lamports: 1,
-        token_amount: Some("5".to_string()),
-        trigger,
-        sell_trade_id: None,
-    }
+    fs::remove_file(&lock).unwrap();
+    let book = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    let held: Value = serde_json::from_str(&fs::read_to_string(&lock).unwrap()).unwrap();
+    assert_eq!(held["pid"], std::process::id());
+    assert!(held["startedAt"].as_i64().unwrap() > 0);
+    assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 2, "no temp file is left next to the lock and the state");
+    book.close();
 }
 
 #[test]
-fn an_unknown_outcome_keeps_the_spend_and_blocks_a_repeat_buy_and_expiry_later_refunds_it() {
+fn a_version_1_file_or_the_other_modes_file_stops_startup() {
     let dir = StateDir::new();
-    let path = dir.file();
-    let book = TradeBook::open(Some(&path), Mode::Live).unwrap();
-    let t = buy(&book, 0);
-    book.mark_sending(&t.id, sent(&t.id), 1).unwrap();
-    book.resolve(&t.id, Outcome::Unknown { error: "timeout".to_string() }, 2).unwrap();
-    assert_eq!(spent_total(&path), "60000000");
-    let caps = caps();
-    let repeat = book.reserve_buy(request(MINT, 1, false, 3, &caps)).unwrap_err();
-    assert!(repeat.contains("in flight"), "{repeat}");
-    book.resolve(&t.id, Outcome::Expired, 4).unwrap();
-    assert_eq!(book.trade(&t.id).unwrap().state, TradeState::Reconciled);
-    assert_eq!(spent_total(&path), "0");
-    buy(&book, 5);
+    fs::write(dir.live(), json!({ "version": 1, "mode": "live", "snipes": {} }).to_string()).unwrap();
+    let error = TradeBook::open(Some(&dir.live()), Mode::Live).err().expect("version 1 is refused").0;
+    assert!(error.contains("older version") && error.contains("Move or delete"), "{error}");
+    fs::remove_file(dir.live()).unwrap();
+    TradeBook::open(Some(&dir.live()), Mode::DryRun).unwrap().close();
+    let error = TradeBook::open(Some(&dir.live()), Mode::Live).err().expect("other mode is refused").0;
+    assert!(error.contains("dry_run state"), "{error}");
 }
 
 #[test]
-fn sending_is_on_disk_with_the_signature_and_signed_bytes_before_mark_sending_returns() {
-    let dir = StateDir::new();
-    let path = dir.file();
-    let book = TradeBook::open(Some(&path), Mode::Live).unwrap();
-    let t = buy(&book, 0);
-    book.mark_sending(&t.id, sent(&t.id), 1).unwrap();
-    let on_disk: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    let trade = &on_disk["trades"][&t.id];
-    assert_eq!(trade["state"], "sending");
-    assert_eq!(trade["signature"], format!("sig-{}", t.id));
-    assert_eq!(trade["tx"], "AAAA");
-    let reopened = TradeBook::open(Some(&path), Mode::Live).unwrap();
-    let ids: Vec<String> = reopened.unresolved().into_iter().map(|t| t.id).collect();
-    assert_eq!(ids, vec![t.id], "a restart finds the trade to reconcile");
-}
-
-#[test]
-fn a_reserved_trade_found_after_a_restart_was_never_sent_so_it_fails_and_gives_the_spend_back() {
-    let dir = StateDir::new();
-    let path = dir.file();
-    let book = TradeBook::open(Some(&path), Mode::Live).unwrap();
-    let caps = caps();
-    let reserved = book.reserve_buy(BuyRequest { fee_budget: 1, ..request(OTHER, 20_000_000, true, 0, &caps) }).unwrap();
-    let sending = buy(&book, 1);
-    book.mark_sending(&sending.id, sent(&sending.id), 2).unwrap();
-    let reopened = TradeBook::open(Some(&path), Mode::Live).unwrap();
-    let closed: Vec<String> = reopened.recover_after_restart().into_iter().map(|t| t.id).collect();
-    assert_eq!(closed, vec![reserved.id.clone()]);
-    assert_eq!(reopened.trade(&reserved.id).unwrap().state, TradeState::Failed);
-    assert_eq!(reopened.trade(&sending.id).unwrap().state, TradeState::Sending);
-    assert_eq!(spent_total(&path), "60000000", "only the sending trade's reservation remains");
-}
-
-#[test]
-fn a_failed_state_write_refuses_the_send_and_leaves_the_trade_reserved() {
-    let dir = StateDir::new();
-    let path = dir.file();
-    let dir = path.parent().unwrap().to_path_buf();
-    let book = TradeBook::open(Some(&path), Mode::Live).unwrap();
-    let t = buy(&book, 0);
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o500)).unwrap();
-    let refused = book.mark_sending(&t.id, sent(&t.id), 1);
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
-    assert!(refused.is_err());
-    assert_eq!(book.trade(&t.id).unwrap().state, TradeState::Reserved);
-    book.fail_before_send(&t.id, "state write failed");
-    assert_eq!(book.trade(&t.id).unwrap().state, TradeState::Failed);
-    assert_eq!(spent_total(&path), "0");
-}
-
-#[test]
-fn the_spend_reservation_is_the_largest_possible_debit_settled_to_the_actual_one() {
+fn a_mint_is_bought_once_ever_and_refused_while_its_buy_is_reserved_or_pending() {
     let book = TradeBook::open(None, Mode::Live).unwrap();
-    let caps = caps();
-    let over = book.reserve_buy(BuyRequest { fee_budget: 1, ..request(MINT, 100_000_001, true, 0, &caps) }).unwrap_err();
-    assert!(over.contains("maxPerTradeSol"), "{over}");
-    let t = book.reserve_buy(request(MINT, 100_000_000, true, 0, &caps)).unwrap();
-    book.mark_sending(&t.id, sent(&t.id), 1).unwrap();
-    book.resolve(&t.id, landed(Some(5), Some(52_000_000)), 2).unwrap();
-    assert_eq!(book.trade(&t.id).unwrap().spent_lamports, Some(52_000_000));
-    // 0.25 SOL total cap: 0.052 spent, so a 0.1 SOL reservation still fits and a third does not.
-    assert!(book.reserve_buy(BuyRequest { fee_budget: 1, ..request(OTHER, 100_000_000, true, 3, &caps) }).is_ok());
-    let third = book.reserve_buy(BuyRequest { fee_budget: 1, ..request(THIRD, 100_000_000, true, 4, &caps) }).unwrap_err();
-    assert!(third.contains("maxPerHourSol") || third.contains("maxTotalSol"), "{third}");
-}
-
-#[test]
-fn a_failed_transaction_keeps_only_its_fee_budget_as_spent() {
-    let book = TradeBook::open(None, Mode::Live).unwrap();
-    let t = buy(&book, 0);
-    book.mark_sending(&t.id, sent(&t.id), 1).unwrap();
-    book.resolve(&t.id, Outcome::Failed { error: "6002".to_string(), spent_lamports: None }, 2).unwrap();
-    assert_eq!(book.trade(&t.id).unwrap().spent_lamports, Some(10_000_000));
-    buy(&book, 3);
-}
-
-#[test]
-fn an_exited_mint_stays_bought_and_skip_if_already_holding_blocks_while_the_position_is_open() {
-    let book = TradeBook::open(None, Mode::Live).unwrap();
-    let caps = caps();
-    let t = buy(&book, 0);
-    book.mark_sending(&t.id, sent(&t.id), 1).unwrap();
-    book.resolve(&t.id, landed(Some(5), None), 2).unwrap();
-    book.open_position(position(&t.id, trigger()));
-    let holding = book.reserve_buy(BuyRequest { fee_budget: 0, ..request(MINT, 1, false, 3, &caps) }).unwrap_err();
-    assert!(holding.contains("still holds"), "{holding}");
-    let sell = book.reserve_sell(MINT, trigger(), TradeRoute::Pump, 4).unwrap();
-    book.mark_sending(&sell.id, sent(&sell.id), 5).unwrap();
-    book.resolve(&sell.id, landed(None, None), 6).unwrap();
+    let ticket = reserve(&book, MINT, "dev").unwrap();
+    assert_eq!(reserve(&book, MINT, "dev"), Err(ReserveError::Busy(Side::Buy)), "reserved");
+    book.mark_pending(&ticket, sent(14_000_000, 10_000_000), &wide(), 1_000).unwrap();
+    assert_eq!(reserve(&book, MINT, "other"), Err(ReserveError::Busy(Side::Buy)), "pending");
+    book.resolve(&ticket.id, &landed(None), 2_000);
+    assert_eq!(reserve(&book, MINT, "dev"), Err(ReserveError::AlreadyBought), "held");
+    let sell = book.reserve_sell(MINT, 3_000).unwrap();
+    book.mark_pending(&sell, sent(0, 0), &wide(), 3_000).unwrap();
+    book.resolve(&sell.id, &landed(None), 4_000);
     assert!(book.position(MINT).is_none());
-    let bought = book.reserve_buy(BuyRequest { fee_budget: 0, ..request(MINT, 1, true, 7, &caps) }).unwrap_err();
-    assert!(bought.contains("already bought"), "{bought}");
+    assert_eq!(reserve(&book, MINT, "dev"), Err(ReserveError::AlreadyBought), "sold, and still bought once");
 }
 
 #[test]
-fn one_sell_at_a_time_so_an_unknown_sell_blocks_the_next_until_it_resolves() {
-    let book = TradeBook::open(None, Mode::Live).unwrap();
-    book.open_position(position("b", trigger()));
-    let first = book.reserve_sell(MINT, trigger(), TradeRoute::Pump, 1).unwrap();
-    book.mark_sending(&first.id, sent(&first.id), 2).unwrap();
-    book.resolve(&first.id, Outcome::Unknown { error: "timeout".to_string() }, 3).unwrap();
-    let busy = book.reserve_sell(MINT, trigger(), TradeRoute::Pump, 4).unwrap_err();
-    assert!(busy.contains("still unknown"), "{busy}");
-    book.resolve(&first.id, Outcome::Expired, 5).unwrap();
-    assert!(book.reserve_sell(MINT, trigger(), TradeRoute::Pump, 6).is_ok());
-}
-
-#[test]
-fn an_exit_asked_for_during_a_pending_buy_is_returned_when_the_buy_lands() {
-    let book = TradeBook::open(None, Mode::Live).unwrap();
-    let t = buy(&book, 0);
-    book.mark_sending(&t.id, sent(&t.id), 1).unwrap();
-    assert_eq!(book.add_exit_intent(MINT, "post_deleted", "deleted", 2), ExitTarget::Pending);
-    let intents = book.resolve(&t.id, landed(None, None), 3).unwrap();
-    let codes: Vec<&str> = intents.iter().map(|i| i.code.as_str()).collect();
-    assert_eq!(codes, vec!["post_deleted"]);
-}
-
-#[test]
-fn exit_targets_match_the_triggering_account_and_not_just_the_rule() {
-    let book = TradeBook::open(None, Mode::Live).unwrap();
-    let caller = |handle: &str| Actor { namespace: Namespace::PumpFun, id: None, handle: Some(handle.to_string()) };
-    book.open_position(position("b", Trigger { actor: caller("CallerOne"), ..trigger() }));
-    assert_eq!(book.exit_targets_for_actor("r", &caller("callerone")), vec![MINT.to_string()]);
-    assert!(book.exit_targets_for_actor("r", &caller("OtherCaller")).is_empty());
-    assert_eq!(book.exit_targets_for_post("twitter:1"), vec![MINT.to_string()]);
-}
-
-#[test]
-fn a_state_file_of_another_version_mode_or_shape_stops_startup_and_only_a_missing_file_is_created() {
+fn a_buy_that_never_landed_can_be_bought_again_and_is_refunded() {
     let dir = StateDir::new();
-    let path = dir.file();
-    drop(TradeBook::open(Some(&path), Mode::Live).unwrap());
-    let valid: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    let mut other_version = valid.clone();
-    other_version["version"] = Value::from(999);
-    fs::write(&path, other_version.to_string()).unwrap();
-    assert!(TradeBook::open(Some(&path), Mode::Live).err().unwrap().0.contains("ledger.schema.json"));
-    fs::write(&path, valid.to_string()).unwrap();
-    assert!(TradeBook::open(Some(&path), Mode::DryRun).err().unwrap().0.contains("live state"));
-    fs::write(&path, "{not json").unwrap();
-    assert!(TradeBook::open(Some(&path), Mode::Live).err().unwrap().0.contains("buy the same mints again"));
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
-    let unreadable = TradeBook::open(Some(&path), Mode::Live).err().unwrap().0;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-    assert!(unreadable.contains("cannot read"), "{unreadable}");
+    let book = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    let ticket = reserve(&book, MINT, "dev").unwrap();
+    book.mark_pending(&ticket, sent(14_000_000, 10_000_000), &wide(), 1_000).unwrap();
+    assert_eq!(dir.read()["spend"]["totalLamports"], "14000000");
+    book.resolve(&ticket.id, &TradeOutcome::NotLanded { error: "expired".to_string() }, 2_000);
+    let state = dir.read();
+    assert_eq!(state["spend"], json!({ "totalLamports": "0", "recent": [] }));
+    assert_eq!(state["pending"], json!({}));
+    assert_eq!(state["purchases"], json!({}));
+    assert!(reserve(&book, MINT, "dev").is_ok());
 }
 
-/// Written by hand from `shared/ledger.schema.json`, in the shape the TypeScript bot writes: a buy
-/// still sending, its purchase and spend, and an open position from an earlier buy.
-const V1_FILE: &str = r#"{
-  "version": 1,
-  "mode": "live",
-  "snipes": { "dev-ca": 2 },
-  "spend": { "totalLamports": "15928480", "recent": [{ "tradeId": "mg1abc-0", "at": 1772000001000, "lamports": "15928480" }] },
-  "purchases": { "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29": { "firstAt": 1771990000000, "tradeId": "mg0aaa-3" } },
-  "trades": {
-    "mg1abc-0": {
-      "id": "mg1abc-0", "side": "buy", "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA", "route": "pump", "state": "sending",
-      "createdAt": 1772000001000,
-      "trigger": { "rule": "dev-ca", "fireKey": "dev-ca|FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA", "eventRef": "tweet/content twitter:2026541002650550272",
-        "postKey": "twitter:2026541002650550272", "actor": { "namespace": "x", "id": "111", "handle": "dev_one" } },
-      "reservedLamports": "15928480", "feeBudgetLamports": "5928480", "signature": "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW",
-      "lastValidBlockHeight": 300000150, "tx": "AAAA", "senders": ["mainnet.helius-rpc.com", "jito"], "sentAt": 1772000001010, "exitIntents": []
-    }
-  },
-  "positions": {
-    "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29": {
-      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29", "route": "pump", "tokenProgram": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
-      "openedAt": 1771990000500, "buyTradeId": "mg0aaa-3", "costLamports": "10000000", "tokenAmount": null,
-      "trigger": { "rule": "caller", "fireKey": "caller|H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29", "eventRef": "account/callout c-1",
-        "actor": { "namespace": "pump_fun", "handle": "CallerOne" } }
-    }
-  }
-}"#;
+#[test]
+fn an_unknown_outcome_keeps_the_trade_pending_with_its_spend() {
+    let dir = StateDir::new();
+    let book = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    let ticket = reserve(&book, MINT, "dev").unwrap();
+    book.mark_pending(&ticket, sent(14_000_000, 10_000_000), &wide(), 1_000).unwrap();
+    book.resolve(&ticket.id, &TradeOutcome::Unknown { error: "no answer".to_string() }, 2_000);
+    let state = dir.read();
+    assert_eq!(state["pending"][&ticket.id]["signature"], "sig");
+    assert_eq!(state["spend"]["totalLamports"], "14000000");
+    assert_eq!(book.pending().len(), 1);
+}
 
 #[test]
-fn a_version_1_file_in_the_shared_format_loads_and_round_trips() {
+fn a_landed_buy_is_one_write_that_removes_pending_records_the_purchase_and_opens_the_position_at_its_amount() {
     let dir = StateDir::new();
-    let path = dir.file();
-    fs::write(&path, V1_FILE).unwrap();
-    let book = TradeBook::open(Some(&path), Mode::Live).unwrap();
-    let unresolved = book.unresolved();
-    assert_eq!(unresolved.len(), 1);
-    assert_eq!(unresolved[0].last_valid_block_height, Some(300_000_150));
-    assert_eq!(unresolved[0].reserved_lamports, 15_928_480);
-    let held = book.position("H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29").unwrap();
-    assert_eq!(held.token_amount, None);
-    assert_eq!(
-        book.exit_targets_for_actor("caller", &Actor { namespace: Namespace::PumpFun, id: None, handle: Some("callerone".to_string()) })
-            .len(),
-        1
-    );
-    let caps = Spend { max_per_trade_sol: 1.0, max_per_hour_sol: 1.0, max_total_sol: 1.0 };
-    let repeat = book.reserve_buy(request("H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29", 1, true, 1772000002000, &caps)).unwrap_err();
-    assert!(repeat.contains("already bought (trade mg0aaa-3)"), "{repeat}");
-    assert!(!book.reserve_snipe("dev-ca", 2), "snipes used are read from the file");
+    let book = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    let ticket = bought(&book, MINT);
+    let state = dir.read();
+    assert_eq!(state["pending"], json!({}));
+    assert_eq!(state["purchases"][MINT], json!({ "rule": "dev", "at": 2_000 }));
+    assert_eq!(state["spend"]["totalLamports"], "12000000", "spend settles to the actual debit");
+    assert_eq!(state["spend"]["recent"][0], json!({ "tradeId": ticket.id, "at": 1_000, "lamports": "12000000" }));
+    let position = &state["positions"][MINT];
+    assert_eq!(position["costLamports"], "10000000", "the cost is the amount spent on the token");
+    assert_eq!(position["tokenAmount"], "500");
+    assert_eq!(position["tokenProgram"], TOKEN_PROGRAM);
+    assert_eq!(position["trigger"], json!({ "eventRef": "tweet/content twitter:1", "postKey": "twitter:1" }));
+}
+
+#[test]
+fn a_buy_that_landed_with_an_error_is_not_a_purchase_and_keeps_its_reservation_when_the_debit_is_unknown() {
+    let book = TradeBook::open(None, Mode::Live).unwrap();
+    let dir = StateDir::new();
+    let book_on_disk = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    for (book, spent, total) in [(&book, None, None), (&book_on_disk, Some(9_000), Some("9000"))] {
+        let ticket = reserve(book, MINT, "dev").unwrap();
+        book.mark_pending(&ticket, sent(14_000_000, 10_000_000), &wide(), 1_000).unwrap();
+        book.resolve(&ticket.id, &TradeOutcome::Failed { error: "6002".to_string(), spent_lamports: spent }, 2_000);
+        assert!(book.position(MINT).is_none());
+        assert!(reserve(book, MINT, "dev").is_ok(), "not a purchase");
+        if let Some(total) = total {
+            assert_eq!(dir.read()["spend"]["totalLamports"], total);
+        }
+    }
+}
+
+#[test]
+fn the_spend_caps_are_checked_at_the_pending_write_and_a_refused_buy_writes_nothing() {
+    let dir = StateDir::new();
+    let book = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    let ticket = reserve(&book, MINT, "dev").unwrap();
+    let error = book.mark_pending(&ticket, sent(20_000_000, 10_000_000), &caps(0.015, 1.0, 1.0), 1_000).unwrap_err();
+    assert!(error.contains("maxPerTradeSol"), "{error}");
+    assert_eq!(dir.read()["pending"], json!({}));
+    let again = reserve(&book, MINT, "dev").expect("the refused ticket is gone");
+    book.cancel(&again);
+
+    let first = reserve(&book, OTHER, "dev").unwrap();
+    book.mark_pending(&first, sent(14_000_000, 10_000_000), &caps(1.0, 0.02, 1.0), 1_000).unwrap();
+    let second = reserve(&book, MINT, "dev").unwrap();
+    let error = book.mark_pending(&second, sent(14_000_000, 10_000_000), &caps(1.0, 0.02, 1.0), 2_000).unwrap_err();
+    assert!(error.contains("maxPerHourSol"), "{error}");
+    let third = reserve(&book, MINT, "dev").unwrap();
+    book.mark_pending(&third, sent(14_000_000, 10_000_000), &caps(1.0, 0.02, 1.0), 1_000 + 3_600_000).expect("an hour later");
+    let fourth = reserve(&book, "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN", "dev").unwrap();
+    let error = book.mark_pending(&fourth, sent(14_000_000, 10_000_000), &caps(1.0, 1.0, 0.03), 1_000 + 7_200_000).unwrap_err();
+    assert!(error.contains("maxTotalSol"), "{error}");
+}
+
+#[test]
+fn a_failed_pending_write_sends_nothing_and_leaves_no_reservation() {
+    let dir = StateDir::new();
+    let book = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    let ticket = reserve(&book, MINT, "dev").unwrap();
+    fs::create_dir(dir.0.join("live.json.tmp")).unwrap();
+    let error = book.mark_pending(&ticket, sent(14_000_000, 10_000_000), &wide(), 1_000).unwrap_err();
+    assert!(error.contains("state write failed"), "{error}");
+    fs::remove_dir(dir.0.join("live.json.tmp")).unwrap();
+    assert!(book.pending().is_empty());
     book.flush();
-    let written: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    let original: Value = serde_json::from_str(V1_FILE).unwrap();
-    assert_eq!(written, original, "a load and a write change nothing");
+    assert_eq!(dir.read()["spend"]["totalLamports"], "0");
+    assert!(reserve(&book, MINT, "dev").is_ok());
+}
+
+#[test]
+fn max_snipes_counts_purchases_pending_buys_and_buys_in_progress_by_rule() {
+    let book = TradeBook::open(None, Mode::Live).unwrap();
+    bought(&book, MINT);
+    let pending = reserve(&book, OTHER, "dev").unwrap();
+    book.mark_pending(&pending, sent(14_000_000, 10_000_000), &wide(), 1_000).unwrap();
+    let _in_progress = reserve(&book, "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN", "dev").unwrap();
+    let _other_rule = reserve(&book, "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo", "other").unwrap();
+    assert_eq!(book.buys_by_rule("dev"), 3);
+}
+
+#[test]
+fn one_sell_at_a_time_and_a_failed_sell_keeps_the_position_and_its_pending_exits() {
+    let dir = StateDir::new();
+    let book = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    bought(&book, MINT);
+    assert_eq!(book.add_exit(MINT, PendingExit { code: ExitReason::PostDeleted, at: 5 }), ExitTarget::Position);
+    assert_eq!(book.add_exit(OTHER, PendingExit { code: ExitReason::PostDeleted, at: 5 }), ExitTarget::None, "nothing held");
+    assert_eq!(book.positions_to_exit().len(), 1);
+    let sell = book.reserve_sell(MINT, 10).unwrap();
+    assert_eq!(book.reserve_sell(MINT, 11), Err(ReserveError::Busy(Side::Sell)));
+    assert!(book.positions_to_exit().is_empty(), "a sell is in progress");
+    book.mark_pending(&sell, sent(105_000, 0), &wide(), 10).unwrap();
+    book.resolve(&sell.id, &TradeOutcome::Failed { error: "slippage".to_string(), spent_lamports: Some(5_000) }, 20);
+    let state = dir.read();
+    assert_eq!(state["positions"][MINT]["pendingExits"], json!([{ "code": "post_deleted", "at": 5 }]));
+    assert_eq!(state["spend"]["totalLamports"], "12105000", "a failed sell keeps its reservation");
+    assert_eq!(book.positions_to_exit().len(), 1, "tried again");
+    assert_eq!(book.reserve_sell(OTHER, 30), Err(ReserveError::NoPosition));
+}
+
+#[test]
+fn a_sell_is_never_refused_by_the_spend_caps_and_an_expired_sell_is_refunded() {
+    let dir = StateDir::new();
+    let book = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    bought(&book, MINT);
+    let sell = book.reserve_sell(MINT, 10).unwrap();
+    book.mark_pending(&sell, sent(105_000, 0), &caps(0.0, 0.0, 0.0), 10).expect("an exit always goes out");
+    assert_eq!(dir.read()["spend"]["totalLamports"], "12105000");
+    book.resolve(&sell.id, &TradeOutcome::NotLanded { error: "expired".to_string() }, 20);
+    assert_eq!(dir.read()["spend"]["totalLamports"], "12000000");
+    let again = book.reserve_sell(MINT, 30).unwrap();
+    book.mark_pending(&again, sent(105_000, 0), &wide(), 30).unwrap();
+    book.resolve(&again.id, &landed(None), 40);
+    let state = dir.read();
+    assert_eq!(state["positions"], json!({}));
+    assert_eq!(state["spend"]["totalLamports"], "12105000", "a landed sell keeps its reservation");
+}
+
+#[test]
+fn a_delete_during_a_pending_buy_waits_on_it_and_the_position_takes_it_over() {
+    let dir = StateDir::new();
+    let book = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    let ticket = reserve(&book, MINT, "dev").unwrap();
+    book.mark_pending(&ticket, sent(14_000_000, 10_000_000), &wide(), 1_000).unwrap();
+    assert_eq!(book.exit_targets_for_post("twitter:1"), vec![MINT.to_string()], "the pending buy was bought on the post");
+    assert_eq!(book.add_exit(MINT, PendingExit { code: ExitReason::PostDeleted, at: 1_500 }), ExitTarget::PendingBuy);
+    assert_eq!(dir.read()["pending"][&ticket.id]["pendingExits"], json!([{ "code": "post_deleted", "at": 1_500 }]));
+    book.resolve(&ticket.id, &landed(None), 2_000);
+    assert_eq!(dir.read()["positions"][MINT]["pendingExits"], json!([{ "code": "post_deleted", "at": 1_500 }]));
+    assert_eq!(book.positions_to_exit().len(), 1);
+}
+
+#[test]
+fn a_restart_keeps_pending_trades_for_the_reconciler_and_drops_unsent_reservations() {
+    let dir = StateDir::new();
+    let book = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    let pending = reserve(&book, MINT, "dev").unwrap();
+    book.mark_pending(&pending, sent(14_000_000, 10_000_000), &wide(), 1_000).unwrap();
+    reserve(&book, OTHER, "dev").unwrap();
+    book.close();
+    drop(book);
+    let book = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    let list = book.pending();
+    assert_eq!(list.len(), 1);
+    assert_eq!((list[0].id.as_str(), list[0].mint.as_str(), list[0].amount_lamports), (pending.id.as_str(), MINT, 10_000_000));
+    assert!(reserve(&book, OTHER, "dev").is_ok(), "an unsent reservation was never on disk");
+}
+
+#[test]
+fn settling_a_buy_updates_the_total_even_after_its_hourly_entry_was_pruned() {
+    let dir = StateDir::new();
+    let book = TradeBook::open(Some(&dir.live()), Mode::Live).unwrap();
+    let old = reserve(&book, MINT, "dev").unwrap();
+    book.mark_pending(&old, sent(14_000_000, 10_000_000), &wide(), 1_000).unwrap();
+    let later = reserve(&book, OTHER, "dev").unwrap();
+    book.mark_pending(&later, sent(14_000_000, 10_000_000), &wide(), 1_000 + 3_600_001).unwrap();
+    assert_eq!(dir.read()["spend"]["recent"].as_array().unwrap().len(), 1, "the first entry left the hourly window");
+    book.resolve(&old.id, &TradeOutcome::NotLanded { error: "expired".to_string() }, 1_000 + 3_600_002);
+    assert_eq!(dir.read()["spend"]["totalLamports"], "14000000", "the expired buy's reservation came back");
 }
