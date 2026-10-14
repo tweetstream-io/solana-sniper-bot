@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TradeBook, type Pending } from "../src/execute/trades.ts";
@@ -29,8 +29,10 @@ const pending = (over: Partial<Pending> = {}): Pending => ({
   trigger: { eventRef: "tweet/content twitter:1", postKey: "twitter:1" },
   tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
   sentAt: 1,
+  pendingExits: [],
   ...over,
 });
+const sellOf = (mint = MINT, over: Partial<Pending> = {}) => pending({ side: "sell", mint, reservedLamports: "105000", amountLamports: "0", ...over });
 
 // A buy through the same calls the trader makes, up to the pending write.
 function sendBuy(book: TradeBook, id: string, over: Partial<Pending> = {}, now = 1): void {
@@ -90,14 +92,46 @@ test("a buy that landed with an error keeps its actual cost, or the whole reserv
   assert.equal(book.begin(MINT, "buy"), null, "the failed mint may be bought again");
 });
 
-test("a Jupiter rejection refunds the reservation; an unknown answer may store the signature Jupiter returned", () => {
+test("a sell reserves its fees past the spend caps, keeps them when it lands, and gets them back when Jupiter rejects it", () => {
   const path = statePath();
   const book = TradeBook.open(path, "live");
-  sendBuy(book, "j1", { route: "jupiter", signature: null, lastValidBlockHeight: null });
-  book.resolve("j1", { kind: "unknown", error: "Jupiter code -1001", signature: "from-jupiter" }, 2);
+  hold(book, MINT);
+  hold(book, OTHER);
+  const full = { maxPerTradeSol: 0, maxPerHourSol: 0, maxTotalSol: 0 }; // no buy would fit
+  assert.equal(book.recordPending("s1", sellOf(MINT), full, 3), null);
+  book.resolve("s1", { kind: "landed", spentLamports: -9_000_000n, tokenAmount: null }, 4);
+  assert.equal(book.recordPending("j1", sellOf(OTHER, { route: "jupiter", signature: null, lastValidBlockHeight: null }), full, 5), null);
+  book.resolve("j1", { kind: "unknown", error: "Jupiter Failed code -1001", signature: "from-jupiter" }, 6);
   assert.equal(onDisk(path).pending.j1.signature, "from-jupiter");
-  book.resolve("j1", { kind: "rejected", error: "Jupiter code -2004" }, 3);
-  assert.equal(onDisk(path).spend.totalLamports, "0");
+  book.resolve("j1", { kind: "rejected", error: "Jupiter Failed code -2004" }, 7);
+  // Two buys at their 60,000,000 reservations, plus the landed sell's 105,000.
+  assert.equal(onDisk(path).spend.totalLamports, "120105000");
+  assert.ok(book.position(OTHER), "a rejected sell keeps the position");
+  book.close();
+});
+
+test("settling a buy moves the total even after its reservation left the hour window", () => {
+  const path = statePath();
+  const book = TradeBook.open(path, "live");
+  sendBuy(book, "b1", {}, 0);
+  sendBuy(book, "b2", { mint: OTHER }, 3_600_001); // checking b2's caps drops b1 from the hour window
+  assert.deepEqual(onDisk(path).spend.recent.map((r: { tradeId: string }) => r.tradeId), ["b2"]);
+  book.resolve("b1", { kind: "landed", spentLamports: 54_000_000n, tokenAmount: 5n }, 3_600_002);
+  assert.equal(onDisk(path).spend.totalLamports, "114000000"); // 60,000,000 + 60,000,000 - 60,000,000 + 54,000,000
+  book.close();
+});
+
+test("a delete during a pending buy waits on the buy, and the position takes it over in the confirming write", () => {
+  const path = statePath();
+  const book = TradeBook.open(path, "live");
+  sendBuy(book, "b1");
+  assert.deepEqual(book.boughtOnPost("twitter:1"), [MINT]);
+  assert.equal(book.addExit(MINT, { code: "post_deleted", at: 2 }), "pending");
+  assert.deepEqual(onDisk(path).pending.b1.pendingExits, [{ code: "post_deleted", at: 2 }]);
+  book.resolve("b1", { kind: "landed", spentLamports: null, tokenAmount: 5n }, 3);
+  assert.deepEqual(onDisk(path).positions[MINT].pendingExits, [{ code: "post_deleted", at: 2 }]);
+  assert.deepEqual(book.positionsToExit(), [MINT]);
+  assert.equal(book.addExit(OTHER, { code: "post_deleted", at: 4 }), null);
   book.close();
 });
 
@@ -138,7 +172,7 @@ test("one buy per mint, ever: a bought mint is refused after its sale, and so is
   book.end(MINT);
   hold(book);
   assert.equal(book.begin(MINT, "sell"), null);
-  book.recordPending("s1", pending({ side: "sell", reservedLamports: "0", amountLamports: "0" }), caps, 3);
+  book.recordPending("s1", sellOf(), caps, 3);
   book.end(MINT);
   book.resolve("s1", { kind: "landed", spentLamports: null, tokenAmount: null }, 4);
   assert.equal(book.position(MINT), undefined);
@@ -165,11 +199,10 @@ test("a sell that lands with an error keeps the position and its exits; one sell
   const path = statePath();
   const book = TradeBook.open(path, "live");
   hold(book);
-  assert.equal(book.addExit(MINT, { code: "post_deleted", at: 3 }), true);
-  assert.equal(book.addExit(OTHER, { code: "post_deleted", at: 3 }), false);
+  assert.equal(book.addExit(MINT, { code: "post_deleted", at: 3 }), "position");
   assert.deepEqual(book.positionsToExit(), [MINT]);
   assert.equal(book.begin(MINT, "sell"), null);
-  book.recordPending("s1", pending({ side: "sell", reservedLamports: "0", amountLamports: "0" }), caps, 4);
+  book.recordPending("s1", sellOf(), caps, 4);
   book.end(MINT);
   assert.match(String(book.begin(MINT, "sell")), /in progress/);
   assert.deepEqual(book.positionsToExit(), []);
@@ -191,20 +224,26 @@ test("a position is sold only once its balance is known; a 0 read is ignored", (
   assert.deepEqual(book.positionsToExit(), [MINT]);
 });
 
-test("one process per state file: a live lock refuses, a dead or unreadable one is taken over", () => {
+test("one process per state file: any existing lock refuses the start, naming its process, and only a clean exit removes it", () => {
   const path = statePath();
   const lock = path.replace(/\.json$/, ".lock");
   const book = TradeBook.open(path, "live");
   assert.equal(JSON.parse(readFileSync(lock, "utf8")).pid, process.pid);
-  assert.throws(() => TradeBook.open(path, "live"), /held by running process/);
+  assert.throws(() => TradeBook.open(path, "live"), new RegExp(`process ${process.pid} holds it and is running`));
   book.close();
   assert.equal(existsSync(lock), false);
   const dead = Number(spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"]).stdout);
-  writeFileSync(lock, JSON.stringify({ pid: dead, startedAt: 0 }));
+  for (const [content, says] of [
+    [JSON.stringify({ pid: dead, startedAt: 0 }), `process ${dead} left it and is not running`],
+    ["", "cannot be read"],
+    ["{half", "cannot be read"],
+  ]) {
+    writeFileSync(lock, content!);
+    assert.throws(() => TradeBook.open(path, "live"), (e: Error) => e.message.includes(says!) && e.message.includes(`then delete ${lock}`));
+    assert.equal(readFileSync(lock, "utf8"), content, "the lock is left for the user to check");
+  }
+  rmSync(lock);
   TradeBook.open(path, "live").close();
-  writeFileSync(lock, "{half");
-  TradeBook.open(path, "live").close();
-  assert.equal(existsSync(lock), false);
 });
 
 test("a version 1, invalid, unreadable, or other-mode file stops startup and leaves no lock; only a missing file is created", () => {

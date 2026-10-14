@@ -9,7 +9,6 @@ export type MarketSnapshot = {
   marketCapUsd?: number;
   liquidityUsd?: number;
   createdAtMs?: number; // earliest pool creation
-  platform?: string; // venue of the deepest pool, as DexScreener names it (pumpfun, raydium, ...)
 };
 
 export type RugcheckSummary = { score: number | null; dangers: string[] };
@@ -28,9 +27,6 @@ export interface Network {
   signatureStatus(signature: string): Promise<{ confirmed: boolean; err: unknown } | null>;
   // False once a transaction built on this blockhash can no longer land.
   isBlockhashValid(blockhash: string): Promise<boolean>;
-  balance(owner: string): Promise<bigint>; // lamports
-  // The wallet's lamports after the signed transaction, simulated without landing it.
-  simulate(signedTx: string, wallet: string): Promise<{ err: unknown; walletLamportsAfter: bigint | null }>;
   // How many lamports the transaction took from `owner` (fees, tips, rent, principal). null: not found.
   transactionDebit(signature: string, owner: string): Promise<bigint | null>;
   jupiterOrder(q: { inputMint: string; outputMint: string; amount: bigint; taker: string }): Promise<JupiterOrder>;
@@ -45,7 +41,7 @@ export interface Network {
   tokenBalance(owner: string, mint: string): Promise<bigint>;
 }
 
-export class RpcError extends Error {}
+class RpcError extends Error {}
 
 let nextId = 1;
 
@@ -113,18 +109,6 @@ export class LiveNetwork implements Network {
     return (await rpcCall<{ value: boolean }>(this.rpcUrl, "isBlockhashValid", [blockhash, { commitment: "processed" }])).value;
   }
 
-  async balance(owner: string): Promise<bigint> {
-    return BigInt((await rpcCall<{ value: number }>(this.rpcUrl, "getBalance", [owner, { commitment: "processed" }])).value);
-  }
-
-  // https://solana.com/docs/rpc/http/simulatetransaction, asking for the wallet account afterwards.
-  async simulate(signedTx: string, wallet: string): Promise<{ err: unknown; walletLamportsAfter: bigint | null }> {
-    type Raw = { value: { err: unknown; accounts: Array<{ lamports: number } | null> | null } };
-    const params = { encoding: "base64", sigVerify: false, commitment: "processed", accounts: { encoding: "base64", addresses: [wallet] } };
-    const { value } = await rpcCall<Raw>(this.rpcUrl, "simulateTransaction", [signedTx, params]);
-    const after = value.accounts?.[0];
-    return { err: value.err, walletLamportsAfter: after ? BigInt(after.lamports) : null };
-  }
 
   async jupiterOrder(q: { inputMint: string; outputMint: string; amount: bigint; taker: string }): Promise<JupiterOrder> {
     const query = new URLSearchParams({ inputMint: q.inputMint, outputMint: q.outputMint, amount: q.amount.toString(), taker: q.taker });
@@ -176,7 +160,7 @@ export class LiveNetwork implements Network {
   async marketSnapshot(mint: string, signal?: AbortSignal): Promise<MarketSnapshot> {
     const response = await fetch(`https://api.dexscreener.com/token-pairs/v1/solana/${mint}`, { signal });
     if (!response.ok) return {};
-    type Pair = { dexId?: string; liquidity?: { usd?: number }; marketCap?: number; pairCreatedAt?: number | null };
+    type Pair = { liquidity?: { usd?: number }; marketCap?: number; pairCreatedAt?: number | null };
     const pairs = (await response.json()) as Pair[];
     if (!Array.isArray(pairs) || !pairs.length) return {};
     const deepest = [...pairs].sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0]!;
@@ -185,7 +169,6 @@ export class LiveNetwork implements Network {
       marketCapUsd: deepest.marketCap,
       liquidityUsd: deepest.liquidity?.usd,
       createdAtMs: created.length ? Math.min(...created) : undefined,
-      platform: deepest.dexId,
     };
   }
 

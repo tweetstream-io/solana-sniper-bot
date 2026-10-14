@@ -4,7 +4,7 @@
 // Reading order: Decider.handle here, then Trader.buy in execute/trade.ts.
 
 import { Keypair } from "@solana/web3.js";
-import { eventRef, payloadProblem, postKey, publishedAtMs, type AccountCallout, type Platform, type AccountFollow, type AccountProfileUpdate, type AccountThesis, type AccountTokenVerified, type Envelope, type TweetContent, type TweetDelete, type TweetMeta, type TweetPin, type TweetUpdate } from "./protocol.ts";
+import { eventRef, payloadProblem, postKey, publishedAtMs, type AccountCallout, type Platform, type AccountFollow, type AccountProfileUpdate, type AccountThesis, type AccountTokenVerified, type Envelope, type PostKind, type TweetContent, type TweetDelete, type TweetMeta, type TweetPin, type TweetUpdate } from "./protocol.ts";
 import type { Config } from "./setup/config.ts";
 import { FeedClient, type Receipt } from "./feed/client.ts";
 import { EventDedupe } from "./feed/dedupe.ts";
@@ -105,8 +105,8 @@ export class Decider {
         else this.store.applyMeta(key, d as TweetMeta);
         const entry = this.store.get(key)!;
         const author = entry.post?.author;
-        if (!entry.post || (!author?.id && !author?.handle)) break; // no author yet: wait for the content
-        activity = this.postActivityFor(key, entry.post, entry.meta, ref);
+        if (!entry.post?.kind || (!author?.id && !author?.handle)) break; // no kind or author yet: wait for them
+        activity = this.postActivityFor(key, entry.post, entry.post.kind, entry.meta, ref);
         outcome.publishedAt = publishedAtMs(key.split(":")[0]!, entry.post.tweetId, entry.post.createdAt);
         outcome.firstContent = pair === "tweet/content" && !hadContent;
         break;
@@ -149,11 +149,11 @@ export class Decider {
     return outcome;
   }
 
-  private postActivityFor(key: string, post: Post, meta: TweetMeta | null, ref: string): Activity {
+  private postActivityFor(key: string, post: Post, kind: PostKind, meta: TweetMeta | null, ref: string): Activity {
     const signals = detectPostSignals(post, key, ref);
     const fromMeta = meta ? detectMetaSignals(meta, post.author, key, ref) : [];
     const seen = new Set(signals.map((s) => s.mint));
-    return postActivity(post, key, ref, [...signals, ...fromMeta.filter((s) => !seen.has(s.mint))]);
+    return postActivity(post, kind, key, ref, [...signals, ...fromMeta.filter((s) => !seen.has(s.mint))]);
   }
 }
 

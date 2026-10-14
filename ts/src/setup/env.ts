@@ -28,7 +28,7 @@ const DEFAULT_JITO = "https://ny.mainnet.block-engine.jito.wtf";
 
 const text = (name: string) => process.env[name]?.trim() || null;
 // .env, config.json, and state/ live at the repository root, shared by both implementations.
-export const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 export function readEnv(): Env {
   const envFile = resolve(REPO_ROOT, ".env");

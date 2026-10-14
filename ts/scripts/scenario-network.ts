@@ -67,8 +67,6 @@ export class ScenarioNetwork implements Network {
   readonly debits = new Map<string, bigint>(); // signature -> lamports taken from the wallet
   readonly balances = new Map<string, bigint>(); // mint -> token balance of the wallet
   readonly expiredBlockhashes = new Set<string>(); // isBlockhashValid answers false for these
-  walletLamports = 10_000_000_000n;
-  simulatedDebit = 0n; // what a simulated transaction takes from the wallet
   blockHeight: number;
   private readonly chain: ScenarioChain;
 
@@ -97,12 +95,6 @@ export class ScenarioNetwork implements Network {
   }
   async isBlockhashValid(blockhash: string) {
     return !this.expiredBlockhashes.has(blockhash);
-  }
-  async balance() {
-    return this.walletLamports;
-  }
-  async simulate() {
-    return { err: null, walletLamportsAfter: this.walletLamports - this.simulatedDebit };
   }
   async transactionDebit(signature: string) {
     return this.debits.get(signature) ?? null;

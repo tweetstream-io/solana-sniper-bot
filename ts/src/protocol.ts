@@ -17,8 +17,8 @@ export type Author = {
 };
 
 // account/* actors and follow targets also carry the profile website.
-export type AccountRef = Author & { websiteUrl?: string };
-export type FollowTarget = AccountRef & { handle: string };
+type AccountRef = Author & { websiteUrl?: string };
+type FollowTarget = AccountRef & { handle: string };
 
 export type TweetUrl = { url: string; tco?: string; name?: string };
 
@@ -54,7 +54,7 @@ export type TweetUpdate = Partial<Omit<TweetContent, "createdAt" | "tweetId">> &
   textUpdateType?: "completion";
 };
 
-export type MetaToken = {
+type MetaToken = {
   chain?: "solana";
   contract?: string;
   name?: string;
@@ -134,7 +134,7 @@ export type AccountCallout = {
   updateOf?: string; // callout_update only: the envelope id of the original callout
 };
 
-export type FomoCoin = { address: string; networkId: number; symbol?: string; marketCapUsd?: string };
+type FomoCoin = { address: string; networkId: number; symbol?: string; marketCapUsd?: string };
 
 // account/thesis: a FOMO user's thesis on a coin.
 export type AccountThesis = {
@@ -188,6 +188,9 @@ export function eventRef(event: Envelope): string {
 
 // Checks the fields asyncapi.json marks required for each pair this bot reads, so a malformed
 // frame is skipped with a reason instead of throwing deep inside a detector. null means valid.
+const POST_KINDS: unknown[] = ["post", "quote", "reply", "retweet"];
+const profileValues = (fields: object) => Object.values(fields).every((v) => v === null || typeof v === "string");
+
 export function payloadProblem(pair: string, d: unknown): string | null {
   const o = d as Record<string, any> | null;
   const str = (v: unknown) => typeof v === "string" && v.length > 0;
@@ -196,8 +199,9 @@ export function payloadProblem(pair: string, d: unknown): string | null {
   const need = (ok: boolean, what: string) => (ok ? null : `missing or invalid ${what}`);
   switch (pair) {
     case "tweet/content":
-      return need(str(o!.tweetId), "tweetId") ?? need(typeof o!.text === "string", "text") ?? need(obj(o!.author), "author") ?? need(["post", "quote", "reply", "retweet"].includes(o!.kind), "kind");
+      return need(str(o!.tweetId), "tweetId") ?? need(typeof o!.text === "string", "text") ?? need(obj(o!.author), "author") ?? need(POST_KINDS.includes(o!.kind), "kind");
     case "tweet/update":
+      return need(str(o!.tweetId), "tweetId") ?? need(!("kind" in o!) || POST_KINDS.includes(o!.kind), "kind");
     case "tweet/meta":
     case "tweet/delete":
       return need(str(o!.tweetId), "tweetId");
@@ -207,7 +211,13 @@ export function payloadProblem(pair: string, d: unknown): string | null {
     case "account/unfollow":
       return need(obj(o!.actor), "actor") ?? need(obj(o!.target) && str(o!.target.handle), "target.handle") ?? need(str(o!.eventId), "eventId");
     case "account/profile_update":
-      return need(obj(o!.actor), "actor") ?? need(obj(o!.changes), "changes") ?? need(str(o!.eventId), "eventId");
+      return (
+        need(obj(o!.actor), "actor") ??
+        need(obj(o!.changes), "changes") ??
+        need(str(o!.eventId), "eventId") ??
+        need(profileValues(o!.changes), "changes (every value a string or null)") ??
+        need(o!.previous === undefined || (obj(o!.previous) && profileValues(o!.previous)), "previous (every value a string or null)")
+      );
     case "account/callout":
     case "account/callout_update":
       return need(str(o!.caller?.username), "caller.username") ?? need(str(o!.token?.address), "token.address") ?? need(str(o!.calloutId), "calloutId");

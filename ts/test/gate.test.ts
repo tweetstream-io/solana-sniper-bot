@@ -60,8 +60,6 @@ function network(accounts: Record<string, AccountData>, delayMs = 0, rug: { scor
     quoteSellLamports: never,
     tokenBalance: never,
     isBlockhashValid: never,
-    balance: never,
-    simulate: never,
   };
 }
 
@@ -74,18 +72,13 @@ const deps = (net: Network, budgetMs = 100, safety: object = {}): GateDeps => ({
 });
 const curveKey = bondingCurveAddress(MINT).toBase58();
 
-test("a live pump.fun curve skips authority checks, routes locally, and prices from the curve", async () => {
+test("a live pump.fun curve passes without authority checks and is priced from the curve", async () => {
   const result = await runGate(MINT, rule(), null, deps(network({ [MINT]: mint(T22, { mintAuthority: true }), [curveKey]: liveCurve() })));
   assert.equal(result.pass, true);
-  assert.equal(result.pass && result.route, "pump");
+  assert.equal(result.pass && result.tokenProgram, T22);
   // 32 SOL virtual reserves x 1e15 supply / 1e15 virtual tokens = 32 SOL = $4800 at $150.
   assert.equal(result.facts.marketCapUsd, 4800);
   assert.equal(result.facts.liquidityUsd, 300);
-});
-
-test("off the curve, a freeze authority rejects the token", async () => {
-  const result = await runGate(MINT, rule(), null, deps(network({ [MINT]: mint(SPL, { freezeAuthority: true }) })));
-  assert.equal(result.pass === false && result.code, "freeze_authority");
 });
 
 test("an address owned by another program is not a mint", async () => {
@@ -99,16 +92,25 @@ test("a read slower than the budget counts as unknown and rejects", async () => 
   assert.ok(result.elapsedMs < 150);
 });
 
-test("a market cap filter with no market data rejects unless the rule allows missing data", async () => {
-  const net = network({ [MINT]: mint(SPL) });
-  const strict = await runGate(MINT, rule({ maxMarketCapUsd: 100_000 }), null, deps(net));
+test("an age filter with no market data rejects unless the rule allows missing data", async () => {
+  const net = network({ [MINT]: mint(SPL), [curveKey]: liveCurve() });
+  const strict = await runGate(MINT, rule({ maxTokenAgeSec: 600 }), null, deps(net));
   assert.equal(strict.pass === false && strict.code, "missing_data");
-  const lenient = await runGate(MINT, rule({ maxMarketCapUsd: 100_000, onMissingData: "allow" }), null, deps(net));
+  const lenient = await runGate(MINT, rule({ maxTokenAgeSec: 600, onMissingData: "allow" }), null, deps(net));
   assert.equal(lenient.pass, true);
 });
 
+test("a coin off the pump.fun curve, or one whose curve completed, is not bought", async () => {
+  const none = await runGate(MINT, rule(), null, deps(network({ [MINT]: mint(SPL) })));
+  assert.equal(none.pass === false && none.code, "unsupported_curve");
+  const done = Buffer.from(liveCurve().data);
+  done[48] = 1; // complete
+  const graduated = await runGate(MINT, rule(), null, deps(network({ [MINT]: mint(SPL), [curveKey]: { ...liveCurve(), data: done } })));
+  assert.equal(graduated.pass === false && graduated.code, "unsupported_curve");
+});
+
 test("a 2.5% transfer fee fails the default maxPoolTaxPct of 0", async () => {
-  const result = await runGate(MINT, rule(), null, deps(network({ [MINT]: mint(T22, { feeBps: 250 }) })));
+  const result = await runGate(MINT, rule(), null, deps(network({ [MINT]: mint(T22, { feeBps: 250 }), [curveKey]: liveCurve() })));
   assert.equal(result.pass === false && result.code, "filter_tax");
   assert.equal(result.facts.taxPct, 2.5);
 });
@@ -120,7 +122,7 @@ test("a live curve quoted in another token is skipped as unsupported", async () 
 });
 
 test("a required Rugcheck report without a score counts as unknown when a score limit is set", async () => {
-  const net = network({ [MINT]: mint(SPL) }, 0, { score: null, dangers: [] });
+  const net = network({ [MINT]: mint(SPL), [curveKey]: liveCurve() }, 0, { score: null, dangers: [] });
   const result = await runGate(MINT, rule(), null, deps(net, 100, { rugcheck: "required", maxRugcheckScore: 50 }));
   assert.equal(result.pass === false && result.code, "check_unknown");
 });

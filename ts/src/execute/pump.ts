@@ -10,8 +10,8 @@ const PUMP_FEES_PROGRAM = new PublicKey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6V
 export const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 export const TOKEN_2022_PROGRAM = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const ATA_PROGRAM = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
-export const SYSTEM_PROGRAM = new PublicKey("11111111111111111111111111111111");
-export const WSOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
+const SYSTEM_PROGRAM = new PublicKey("11111111111111111111111111111111");
+const WSOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
 
 // Any of these 8 wallets is a valid buyback fee recipient for SOL-paired coins (FEE_RECIPIENTS.md).
 const BUYBACK_FEE_RECIPIENTS = [
@@ -51,7 +51,7 @@ function cached(key: string, derive: () => PublicKey): PublicKey {
   return address;
 }
 
-export function associatedTokenAddress(owner: PublicKey, mint: PublicKey, tokenProgram: PublicKey): PublicKey {
+function associatedTokenAddress(owner: PublicKey, mint: PublicKey, tokenProgram: PublicKey): PublicKey {
   return cached(`ata|${owner.toBase58()}|${mint.toBase58()}|${tokenProgram.toBase58()}`, () =>
     pda([owner.toBuffer(), tokenProgram.toBuffer(), mint.toBuffer()], ATA_PROGRAM),
   );

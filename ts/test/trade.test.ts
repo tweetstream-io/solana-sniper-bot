@@ -80,7 +80,7 @@ async function pubsubStandIn(answer: (signature: string) => unknown) {
   return { url: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`, close: () => wss.close() };
 }
 
-async function setup(o: { answer?: (signature: string) => unknown; fees?: object; network?: ScenarioNetwork; onSend?: (n: ScenarioNetwork, sig: string) => void } = {}) {
+async function setup(o: { answer?: (signature: string) => unknown; fees?: object; spend?: object; network?: ScenarioNetwork; onSend?: (n: ScenarioNetwork, sig: string) => void } = {}) {
   const statePath = join(mkdtempSync(join(tmpdir(), "trade-")), "live.json");
   const network = o.network ?? new ScenarioNetwork(chain());
   const wallet = Keypair.generate();
@@ -90,6 +90,7 @@ async function setup(o: { answer?: (signature: string) => unknown; fees?: object
   const config = parseConfig({
     rules: [{ name: "r", mode: "ca_scanner", accounts: ["1"], token: { amountSol: 0.01 }, fees: { antiMev: false, priorityFeeSol: 0.0001, tipSol: 0.0001, ...o.fees } }],
     execution: { confirmTimeoutMs: 1_000, rebroadcastMs: 10_000 },
+    ...(o.spend ? { spend: o.spend } : {}),
   });
   const book = TradeBook.open(statePath, "live");
   const cache = new ChainCache(network);
@@ -189,14 +190,38 @@ test("a pending buy expires only when its signature is unknown and its blockhash
   }
 });
 
-test("a pending trade without a signature waits for manual review", async () => {
-  const t = await setup();
+test("a signature that confirms while the blockhash is being checked resolves the buy instead of expiring it", async () => {
+  const t = await setup({ answer: () => "silent" });
   try {
-    const entry = { side: "buy" as const, mint: PLAIN_MINT, route: "jupiter" as const, signature: null, blockhash: "h", lastValidBlockHeight: null, reservedLamports: "1", amountLamports: "1", rule: "r", trigger: { eventRef: "e" }, tokenProgram: "t", sentAt: 0 };
-    t.book.recordPending("j1", entry, t.config.spend, Date.now());
-    t.network.expiredBlockhashes.add("h");
+    await t.trader.buy(t.fire(PUMP_MINT), t.trace(PUMP_MINT));
+    const [p] = onlyPending(t.statePath);
+    // The first lookup finds nothing; by the time the blockhash is invalid, the buy has confirmed.
+    t.network.isBlockhashValid = async () => {
+      t.network.statuses.set(p!.signature, { confirmed: true, err: null });
+      return false;
+    };
     await t.trader.reconcile();
-    assert.equal(onlyPending(t.statePath).length, 1);
+    assert.deepEqual(state(t.statePath).pending, {});
+    assert.ok(t.book.position(PUMP_MINT), "landed, not expired");
+    assert.ok(state(t.statePath).purchases[PUMP_MINT]);
+  } finally {
+    t.close();
+  }
+});
+
+test("a delete during a pending buy is kept on the buy and sold once the buy confirms", async () => {
+  let answers = 0;
+  const t = await setup({ answer: () => (++answers === 1 ? "silent" : null), onSend: (n) => n.balances.set(PUMP_MINT, 300_000_000_000n) });
+  try {
+    const fire = { ...t.fire(PUMP_MINT), signal: { postKey: "twitter:1" } } as Fire;
+    await t.trader.buy(fire, t.trace(PUMP_MINT));
+    const [p] = onlyPending(t.statePath);
+    assert.deepEqual(t.book.boughtOnPost("twitter:1"), [PUMP_MINT]);
+    await t.trader.exit(PUMP_MINT, "post_deleted");
+    t.network.statuses.set(p!.signature, { confirmed: true, err: null });
+    await t.trader.reconcile();
+    assert.equal(t.book.position(PUMP_MINT), undefined, "the buy confirmed with the exit and the reconciler sold it");
+    assert.equal(t.rpc.seen.length, 2, "the buy, then the sell");
   } finally {
     t.close();
   }
@@ -208,7 +233,7 @@ test("a failed state write sends nothing and gives the fire back once", async ()
   chmodSync(dir, 0o500);
   try {
     await t.trader.buy(t.fire(PUMP_MINT), t.trace(PUMP_MINT));
-    assert.equal(t.rpc.seen.length, 0);
+    assert.equal(t.rpc.seen.length + t.jito.seen.length, 0);
     assert.equal(t.released.length, 1);
   } finally {
     chmodSync(dir, 0o700);
@@ -238,26 +263,37 @@ test("antiMev sends only through Jito with its tip; otherwise only to the RPC", 
   }
 });
 
-test("a token the safety checks reject gives the fire back and spends nothing", async () => {
-  const t = await setup();
-  try {
-    await t.trader.buy(t.fire(AUTHORITY_MINT), t.trace(AUTHORITY_MINT));
-    assert.equal(t.released.length, 1);
-    assert.equal(state(t.statePath).spend.totalLamports, "0");
-  } finally {
-    t.close();
+test("a refused buy sends nothing: safety check, coin off the curve, or a reservation above the spend cap", async () => {
+  for (const [mint, spend] of [
+    [AUTHORITY_MINT, undefined], // mint authority
+    [PLAIN_MINT, undefined], // no pump.fun curve
+    [PUMP_MINT, { maxPerTradeSol: 0.014 }], // the 14,023,480-lamport reservation is above 0.014 SOL
+  ] as Array<[string, object | undefined]>) {
+    const t = await setup({ spend });
+    try {
+      await t.trader.buy(t.fire(mint), t.trace(mint));
+      assert.equal(t.rpc.seen.length + t.jito.seen.length, 0, mint);
+      assert.equal(t.released.length, 1);
+      assert.deepEqual(state(t.statePath).pending, {});
+      assert.equal(state(t.statePath).spend.totalLamports, "0");
+    } finally {
+      t.close();
+    }
   }
 });
 
 // Jupiter answers from the test: an order for the wallet, and a chosen /execute result.
+// otherPayer leaves the first signature slot to another signer, as a market maker's quote can.
 class JupiterScenario extends ScenarioNetwork {
+  otherPayer = false;
   execute: () => Promise<JupiterExecute> = async () => ({ status: "Success", code: 0, signature: "landed-sig" });
   override async jupiterOrder(q: { taker: string }): Promise<JupiterOrder> {
-    const payer = new PublicKey(q.taker);
+    const taker = new PublicKey(q.taker);
+    const payer = this.otherPayer ? Keypair.generate().publicKey : taker;
     const message = new TransactionMessage({
       payerKey: payer,
       recentBlockhash: bs58.encode(Buffer.alloc(32, 3)),
-      instructions: [SystemProgram.transfer({ fromPubkey: payer, toPubkey: Keypair.generate().publicKey, lamports: 1 })],
+      instructions: [SystemProgram.transfer({ fromPubkey: taker, toPubkey: Keypair.generate().publicKey, lamports: 1 })],
     }).compileToV0Message();
     return { transaction: Buffer.from(new VersionedTransaction(message).serialize()).toString("base64"), requestId: "req", lastValidBlockHeight: 1_150 };
   }
@@ -266,44 +302,56 @@ class JupiterScenario extends ScenarioNetwork {
   }
 }
 
-test("Jupiter /execute that times out or answers -1001 leaves the buy pending; -1002 refunds it", async () => {
-  for (const [result, stillPending] of [
-    [() => Promise.reject(Object.assign(new Error("timed out"), { name: "TimeoutError" })), true],
-    [async () => ({ status: "Failed", code: -1001 }), true],
-    [async () => ({ status: "Failed", code: -1002 }), false],
-  ] as Array<[() => Promise<JupiterExecute>, boolean]>) {
+// A position whose coin has no live curve, so its sell goes through Jupiter.
+function holdGraduated(book: TradeBook, spend: Parameters<TradeBook["recordDryRunBuy"]>[3]): void {
+  const held = { mint: PLAIN_MINT, reservedLamports: "1000000", amountLamports: "1000000", rule: "r", trigger: { eventRef: "e" }, tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" };
+  assert.equal(book.recordDryRunBuy("held", held, 5_000_000n, spend, Date.now()), null);
+}
+
+test("a Jupiter sell lands only on Success with a code that means landed and a signature to check", async () => {
+  const timeout = () => Promise.reject(Object.assign(new Error("timed out"), { name: "TimeoutError" }));
+  for (const [result, otherPayer, expected] of [
+    [async () => ({ status: "Success", code: 0, signature: "landed-sig" }), false, "sold"],
+    [async () => ({ status: "Success", code: 0 }), false, "sold"], // our own signature is enough
+    [async () => ({ status: "Failed", code: 0 }), false, "pending"],
+    [async () => ({ status: "Success", code: -1001 }), false, "pending"],
+    [timeout, false, "pending"],
+    [async () => ({ status: "Success", code: 0 }), true, "review"], // no signature at all
+    [async () => ({ status: "Failed", code: -1002 }), false, "rejected"],
+  ] as Array<[() => Promise<JupiterExecute>, boolean, string]>) {
     const network = new JupiterScenario(chain());
     network.execute = result;
+    network.otherPayer = otherPayer;
     const t = await setup({ network });
     try {
-      await t.trader.buy(t.fire(PLAIN_MINT), t.trace(PLAIN_MINT));
+      holdGraduated(t.book, t.config.spend);
+      await t.trader.exit(PLAIN_MINT, "max_hold");
       const pending = onlyPending(t.statePath);
-      assert.equal(pending.length, stillPending ? 1 : 0);
-      assert.equal(state(t.statePath).spend.totalLamports, stillPending ? pending[0]!.reservedLamports : "0");
+      const held = t.book.position(PLAIN_MINT) !== undefined;
+      const got = !held && !pending.length ? "sold" : held && !pending.length ? "rejected" : pending[0]!.signature === null ? "review" : "pending";
+      assert.equal(got, expected, JSON.stringify(await result().catch(() => "timeout")));
+      // 1,000,000 bought; a Jupiter sell reserves 5,000 + 0.005 SOL and keeps it unless it was rejected.
+      assert.equal(state(t.statePath).spend.totalLamports, expected === "rejected" ? "1000000" : "6005000");
     } finally {
       t.close();
     }
   }
 });
 
-test("a Jupiter buy whose simulated debit is above its reservation is not sent", async () => {
-  // Reservation: 0.01 SOL + 5,000 signature + 2,074,080 token account + 0.005 SOL fee ceiling
-  // (execution.maxAutoPriorityFeeSol) = 17,079,080. The order's message declares one signature
-  // and no compute budget, so 5,000 lamports of fees go on top of the simulated balance drop.
-  for (const [drop, sent] of [
-    [17_074_080n, true],
-    [17_074_081n, false],
-  ] as Array<[bigint, boolean]>) {
-    const network = new JupiterScenario(chain());
-    network.simulatedDebit = drop;
-    const t = await setup({ network });
-    try {
-      await t.trader.buy(t.fire(PLAIN_MINT), t.trace(PLAIN_MINT));
-      assert.equal(t.book.position(PLAIN_MINT) !== undefined, sent);
-      assert.equal(t.released.length, sent ? 0 : 1);
-    } finally {
-      t.close();
-    }
+test("a sell waiting for manual review stays pending, even with its blockhash expired", async () => {
+  const network = new JupiterScenario(chain());
+  network.otherPayer = true;
+  network.execute = async () => ({ status: "Success", code: 0 });
+  const t = await setup({ network });
+  try {
+    holdGraduated(t.book, t.config.spend);
+    await t.trader.exit(PLAIN_MINT, "max_hold");
+    network.expiredBlockhashes.add(onlyPending(t.statePath)[0]!.blockhash);
+    await t.trader.reconcile();
+    assert.equal(onlyPending(t.statePath).length, 1);
+    assert.ok(t.book.position(PLAIN_MINT));
+  } finally {
+    t.close();
   }
 });
 

@@ -1,16 +1,13 @@
 // Safety checks and rule filters for one fired rule, all started together under one time budget.
 // The only read every buy needs is one getMultipleAccounts for the mint and its pump.fun curve;
-// it decides the route as well. Next: execute/trade.ts builds and signs the transaction.
+// only a live pump.fun curve quoted in SOL passes. Next: execute/trade.ts builds and signs the buy.
 
 import type { Config, Rule } from "../setup/config.ts";
 import type { Signal } from "../detect/types.ts";
 import type { MarketSnapshot, Network, RugcheckSummary } from "../network.ts";
 import { bondingCurveAddress, parseCurve, unsupportedCurve, TOKEN_2022_PROGRAM, TOKEN_PROGRAM, type Curve } from "../execute/pump.ts";
 
-export type Venue = "pump" | "jupiter";
-
-export type Facts = {
-  platform?: string;
+type Facts = {
   marketCapUsd?: number;
   liquidityUsd?: number;
   ageSec?: number;
@@ -18,15 +15,11 @@ export type Facts = {
   suspicious?: boolean;
 };
 
-export type GateCode =
+type GateCode =
   | "check_unknown"
   | "not_a_mint"
-  | "mint_authority"
-  | "freeze_authority"
-  | "risky_extension"
   | "rugcheck_danger"
   | "rugcheck_score"
-  | "filter_platform"
   | "filter_tax"
   | "filter_market_cap"
   | "filter_liquidity"
@@ -36,7 +29,7 @@ export type GateCode =
   | "unsupported_curve";
 
 type Verdict =
-  | { pass: true; route: Venue; curve: Curve | null; tokenProgram: string; facts: Facts }
+  | { pass: true; curve: Curve; tokenProgram: string; facts: Facts }
   | { pass: false; code: GateCode; detail: string; facts: Facts };
 
 export type GateResult = Verdict & { elapsedMs: number };
@@ -51,16 +44,6 @@ export type GateDeps = {
 type Settled<T> = { ok: true; value: T } | { ok: false; error: string };
 const settle = <T>(p: Promise<T>): Promise<Settled<T>> =>
   p.then((value) => ({ ok: true as const, value })).catch((e: Error) => ({ ok: false as const, error: e.name === "TimeoutError" || e.name === "AbortError" ? "timed out" : e.message }));
-
-// Token-2022 extension types (spl-token-2022 ExtensionType) that let someone other than the holder
-// block, take, or tax transfers.
-const RISKY_EXTENSIONS: Record<number, string> = {
-  6: "default account state (accounts start frozen)",
-  9: "non-transferable",
-  12: "permanent delegate (someone can move your tokens)",
-  14: "transfer hook (custom code runs on every transfer)",
-  26: "pausable",
-};
 
 // A Token-2022 transfer fee has an older and a newer setting; the newer one applies from its epoch.
 type TransferFee = { older: { epoch: bigint; bps: number }; newer: { epoch: bigint; bps: number } };
@@ -114,7 +97,7 @@ export function parseMint(data: Uint8Array): MintInfo | null {
 }
 
 const needsMarketData = (f: Rule["filters"]) =>
-  f.minTokenAgeSec !== null || f.maxTokenAgeSec !== null || f.minMarketCapUsd !== null || f.maxMarketCapUsd !== null || f.minLiquidityUsd !== null || f.platforms.length > 0;
+  f.minTokenAgeSec !== null || f.maxTokenAgeSec !== null || f.minMarketCapUsd !== null || f.maxMarketCapUsd !== null || f.minLiquidityUsd !== null;
 
 export async function runGate(mint: string, rule: Rule, signal: Signal | null, deps: GateDeps): Promise<GateResult> {
   const started = performance.now();
@@ -124,12 +107,11 @@ export async function runGate(mint: string, rule: Rule, signal: Signal | null, d
     needsMarketData(rule.filters) ? settle(deps.network.marketSnapshot(mint, budget)) : null,
     deps.safety.rugcheck !== "off" ? settle(deps.network.rugcheck(mint, budget)) : null,
   ]);
-  const verdict = judge(mint, rule, signal, deps, accounts, market, rug);
+  const verdict = judge(rule, signal, deps, accounts, market, rug);
   return { ...verdict, elapsedMs: performance.now() - started };
 }
 
 function judge(
-  mint: string,
   rule: Rule,
   signal: Signal | null,
   deps: GateDeps,
@@ -141,12 +123,11 @@ function judge(
   const facts: Facts = {};
   const fail = (code: GateCode, detail: string) => ({ pass: false as const, code, detail, facts });
 
-  let route: Venue = "jupiter";
-  let curve: Curve | null = null;
-  let tokenProgram = TOKEN_PROGRAM.toBase58();
-  if (!accounts.ok) {
-    if (safety.onUnknown === "reject") return fail("check_unknown", `mint read ${accounts.error} (budget ${safety.budgetMs} ms)`);
-  } else {
+  // The bot buys only on a live pump.fun curve, so without the mint and curve reads there is no buy.
+  if (!accounts.ok) return fail("check_unknown", `mint read ${accounts.error} (budget ${safety.budgetMs} ms)`);
+  let curve: Curve;
+  let tokenProgram: string;
+  {
     const [mintAccount, curveAccount] = accounts.value;
     if (!mintAccount) return fail("not_a_mint", "no account at this address yet");
     const owner = mintAccount.owner;
@@ -156,33 +137,24 @@ function judge(
     const info = parseMint(mintAccount.data);
     if (!info) return fail("not_a_mint", "account data is too short for a mint");
     tokenProgram = owner;
-    curve = curveAccount ? parseCurve(curveAccount.data) : null;
-    const live = curve !== null && !curve.complete;
-    // pump.fun creates every curve mint with no mint or freeze authority, so these checks cannot
-    // fail there; skipping them keeps a curve buy to the single read above.
-    if (!live) {
-      if (safety.rejectMintAuthority && info.mintAuthority) return fail("mint_authority", "the supply can still be increased");
-      if (safety.rejectFreezeAuthority && info.freezeAuthority) return fail("freeze_authority", "holder accounts can be frozen");
-      const risky = info.extensions.find((t) => t in RISKY_EXTENSIONS);
-      if (safety.rejectRiskyExtensions && risky !== undefined) return fail("risky_extension", RISKY_EXTENSIONS[risky]!);
-    }
+    const parsed = curveAccount ? parseCurve(curveAccount.data) : null;
+    // pump.fun creates every curve mint itself, with no mint or freeze authority, so a live curve
+    // needs no authority checks.
+    const live = parsed !== null && !parsed.complete;
+    if (!live) return fail("unsupported_curve", parsed ? "the coin left its pump.fun curve" : "not a pump.fun curve coin");
+    curve = parsed;
+    const unsupported = unsupportedCurve(curve);
+    if (unsupported) return fail("unsupported_curve", unsupported);
     facts.taxPct = transferFeeBps(info.transferFee, deps.epoch()) / 100;
-    if (live) {
-      const unsupported = unsupportedCurve(curve!);
-      if (unsupported) return fail("unsupported_curve", unsupported);
-      route = "pump";
-      facts.platform = "pumpfun";
-      const solUsd = deps.solUsd();
-      if (solUsd !== null) {
-        // Market cap in lamports = price per raw unit (vQuote / vToken) x total raw supply.
-        const capLamports = (curve!.virtualQuoteReserves * curve!.tokenTotalSupply) / curve!.virtualTokenReserves;
-        facts.marketCapUsd = (Number(capLamports) / 1e9) * solUsd;
-        facts.liquidityUsd = (Number(curve!.realQuoteReserves) / 1e9) * solUsd;
-      }
+    const solUsd = deps.solUsd();
+    if (solUsd !== null) {
+      // Market cap in lamports = price per raw unit (vQuote / vToken) x total raw supply.
+      const capLamports = (curve.virtualQuoteReserves * curve.tokenTotalSupply) / curve.virtualTokenReserves;
+      facts.marketCapUsd = (Number(capLamports) / 1e9) * solUsd;
+      facts.liquidityUsd = (Number(curve.realQuoteReserves) / 1e9) * solUsd;
     }
   }
   if (market?.ok) {
-    facts.platform ??= market.value.platform;
     facts.marketCapUsd ??= market.value.marketCapUsd;
     facts.liquidityUsd ??= market.value.liquidityUsd;
     if (market.value.createdAtMs !== undefined) facts.ageSec = Math.max(0, (Date.now() - market.value.createdAtMs) / 1000);
@@ -200,12 +172,6 @@ function judge(
     if (max !== null && value > max) return fail(code, `${unit} ${Math.round(value)} is above ${max}`);
     return null;
   };
-  if (f.platforms.length) {
-    if (facts.platform === undefined) {
-      const m = missing("platforms", "the venue");
-      if (m) return m;
-    } else if (!f.platforms.includes(facts.platform)) return fail("filter_platform", `venue ${facts.platform} is not in [${f.platforms.join(", ")}]`);
-  }
   const checks = [
     range(facts.taxPct, null, f.maxPoolTaxPct, "filter_tax", "maxPoolTaxPct", "transfer fee %"),
     range(facts.marketCapUsd, f.minMarketCapUsd, f.maxMarketCapUsd, "filter_market_cap", "market cap filter", "market cap USD"),
@@ -238,5 +204,5 @@ function judge(
     const m = missing("skipSuspiciousPools", "a rugcheck report (turn on safety.rugcheck)");
     if (m) return m;
   }
-  return { pass: true, route, curve, tokenProgram, facts };
+  return { pass: true, curve, tokenProgram, facts };
 }

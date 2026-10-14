@@ -20,7 +20,6 @@ type Filters = {
   maxMarketCapUsd: number | null;
   minLiquidityUsd: number | null;
   maxPoolTaxPct: number | null;
-  platforms: string[];
   skipSuspiciousPools: boolean;
   onMissingData: "reject" | "allow";
 };
@@ -72,9 +71,6 @@ export type Config = {
     onUnknown: "reject" | "allow";
     rugcheck: "off" | "advisory" | "required";
     maxRugcheckScore: number | null;
-    rejectMintAuthority: boolean;
-    rejectFreezeAuthority: boolean;
-    rejectRiskyExtensions: boolean;
   };
   spend: { maxPerTradeSol: number; maxPerHourSol: number; maxTotalSol: number };
   exits: {

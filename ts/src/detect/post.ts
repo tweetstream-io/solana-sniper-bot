@@ -2,7 +2,7 @@
 // Pure and synchronous, so detection costs microseconds and tests need no network.
 // Next: rules/engine.ts.
 
-import type { Author, Reference, TweetMeta } from "../protocol.ts";
+import type { Author, PostKind, Reference, TweetMeta } from "../protocol.ts";
 import { normalizeHandle } from "../protocol.ts";
 import type { Post } from "./store.ts";
 import { addressesFromUrl, findAll, isSolanaAddress, type FoundAddress } from "./addresses.ts";
@@ -33,7 +33,7 @@ export function makeSignal(
 
 
 // Referenced posts by depth: level 1 is the direct reference, level 2 what that one references.
-export function refLevels(ref: Reference | undefined): Reference[][] {
+function refLevels(ref: Reference | undefined): Reference[][] {
   const levels: Reference[][] = [];
   let current = ref ? [ref] : [];
   for (let depth = 0; current.length && depth < MAX_REF_DEPTH; depth++) {
@@ -82,13 +82,13 @@ export function detectMetaSignals(meta: TweetMeta, author: Author | undefined, p
 }
 
 // What the post's author did, for the engagement and new tweet modes.
-export function postActivity(post: Post, postKey: string, eventRef: string, signals: Signal[]): PostActivity {
+export function postActivity(post: Post, kind: PostKind, postKey: string, eventRef: string, signals: Signal[]): PostActivity {
   const levels = refLevels(post.ref);
   const author = { platform: post.author?.platform ?? keyPlatform(postKey) };
   const actor = accountActor(post.author, author.platform);
   return {
     type: "post",
-    kind: post.kind ?? "post",
+    kind,
     actor,
     postKey,
     eventRef,

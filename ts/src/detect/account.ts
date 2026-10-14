@@ -2,7 +2,6 @@
 // theses and token verifications. Pure and synchronous. Next: rules/engine.ts.
 
 import type { AccountCallout, AccountFollow, AccountProfileUpdate, AccountThesis, AccountTokenVerified, ProfileFields, TweetPin } from "../protocol.ts";
-import { normalizeHandle } from "../protocol.ts";
 import { addressesFromUrl, classifyAddress, findAddresses, findAll, type FoundAddress } from "./addresses.ts";
 import { accountActor, firstPerMint, makeSignal } from "./post.ts";
 import type { Actor, CalloutActivity, Confidence, FollowActivity, FomoActivity, PinActivity, ProfileActivity, ProfileField } from "./types.ts";
