@@ -34,11 +34,11 @@ fn hash_value(value: &Value, hasher: &mut DefaultHasher) {
     match value {
         Value::Null => 0u8.hash(hasher),
         Value::Bool(b) => (1u8, b).hash(hasher),
-        Value::Number(n) => match (n.as_i64(), n.as_u64(), n.as_f64()) {
-            (Some(i), _, _) => (2u8, i).hash(hasher),
-            (None, Some(u), _) => (8u8, u).hash(hasher),
-            (None, None, f) => (7u8, f.map(f64::to_bits)).hash(hasher),
-        },
+        // TypeScript readers see every number as the f64 `JSON.parse` gives, and serialize -0 as 0.
+        Value::Number(n) => {
+            let n = n.as_f64().map(|f| if f == 0.0 { 0.0_f64 } else { f });
+            (2u8, n.map(f64::to_bits)).hash(hasher);
+        }
         Value::String(s) => (3u8, s).hash(hasher),
         Value::Array(items) => {
             (4u8, items.len()).hash(hasher);
