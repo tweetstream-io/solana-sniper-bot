@@ -45,13 +45,12 @@ Each entry in `rules` has one `mode`. A rule reads only the fields for its mode;
 | `rules[].filters.maxMarketCapUsd` | `null` | Skip tokens with a larger market cap. null turns the check off. | Same data as minMarketCapUsd. |
 | `rules[].filters.minLiquidityUsd` | `null` | Skip tokens with less liquidity. null turns the check off. | Same data as minMarketCapUsd. |
 | `rules[].filters.maxPoolTaxPct` | `0` | Skip tokens whose transfer fee is above this percent. null turns the check off. | Read from the mint account, so it costs no extra request. |
-| `rules[].filters.platforms` | `[]` | Venues this rule may trade on, such as pumpfun, pumpswap, raydium, meteora, orca, moonshot. Empty allows any. | pumpfun is built locally; every other venue goes through Jupiter. |
 | `rules[].filters.skipSuspiciousPools` | `false` | Skip tokens that the safety check service flags as dangerous. | Needs safety.rugcheck turned on. |
 | `rules[].filters.onMissingData` | `"reject"` | What to do when a filter needs data that is not available in time. | reject is the safe choice: unknown never counts as passing. |
 | `rules[].fees.slippagePct` | `20` | Largest price move you accept, in percent. | Too low and fast-moving launches fail; too high and you overpay. |
 | `rules[].fees.priorityFeeSol` | `"auto"` | Priority fee for the whole transaction in SOL, or auto for a recent-fee estimate. | auto reads a cached estimate refreshed in the background, so it adds no latency. The whole fee counts against the spend caps. |
 | `rules[].fees.tipSol` | `"auto"` | Tip paid to the Jito block engine in SOL, or auto for the recent landed-tip level. | Only paid when antiMev is on. |
-| `rules[].fees.antiMev` | `true` | Send only through the Jito block engine, with a tip, which protects the transaction from sandwiching. Off: send to the RPC URLs instead. | Jupiter trades are landed by Jupiter and ignore this. |
+| `rules[].fees.antiMev` | `true` | Send only through the Jito block engine, with a tip, which protects the transaction from sandwiching. Off: send to the RPC URLs instead. | Jupiter sells of graduated positions are landed by Jupiter and ignore this. |
 
 ## Everything else
 
@@ -62,9 +61,6 @@ Each entry in `rules` has one `mode`. A rule reads only the fields for its mode;
 | `safety.onUnknown` | `"reject"` | What a check that failed or timed out means. | reject is the safe choice. |
 | `safety.rugcheck` | `"off"` | off: skip. advisory: reject only on a danger result that arrives in time. required: no answer counts as unknown. | Latency: an extra HTTPS request in the parallel check set. |
 | `safety.maxRugcheckScore` | `null` | Reject when the normalised risk score is above this. null turns the score test off. |  |
-| `safety.rejectMintAuthority` | `true` | Reject tokens whose supply can still be increased. | Skipped for pump.fun curve tokens, whose authorities are fixed by the program. |
-| `safety.rejectFreezeAuthority` | `true` | Reject tokens whose holder accounts can be frozen. | Skipped for pump.fun curve tokens. |
-| `safety.rejectRiskyExtensions` | `true` | Reject Token-2022 mints with transfer hooks, permanent delegates, default-frozen accounts, pausing, or non-transferable tokens. |  |
 | `spend.maxPerTradeSol` | `0.1` | Largest single buy. |  |
 | `spend.maxPerHourSol` | `0.5` | Most SOL spent in any rolling hour. |  |
 | `spend.maxTotalSol` | `1` | Most SOL this bot will ever spend. |  |

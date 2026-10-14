@@ -21,14 +21,12 @@ All checks for one buy start together and share one time budget, `safety.budgetM
 | Check | Where the data comes from | Default |
 | --- | --- | --- |
 | Address is a mint | the mint account must be owned by the SPL Token or Token-2022 program; chart links sometimes point at a pool | always on |
-| Mint authority | mint account; someone could still create more tokens | reject |
-| Freeze authority | mint account; someone could freeze your tokens | reject |
-| Risky Token-2022 extensions | mint account: transfer hook, permanent delegate, default-frozen accounts, pausable, non-transferable | reject |
 | Transfer fee | Token-2022 transfer fee config | `maxPoolTaxPct` 0 |
-| Market cap, liquidity, age, venue | the curve itself for pump.fun tokens; the event's own market cap for callouts and FOMO; DexScreener for other tokens | off until a rule sets a limit |
+| On a pump.fun curve | the curve account: the coin must still be on its bonding curve and quoted in SOL; anything else is skipped as `unsupported_curve` | always on |
+| Market cap, liquidity, age | the curve itself; the event's own market cap for callouts and FOMO; DexScreener for the age | off until a rule sets a limit |
 | Rugcheck | `api.rugcheck.xyz` report summary: danger-level risks and the normalised score | off |
 
-pump.fun curve tokens skip the authority and extension checks: pump.fun creates those mints itself, with authorities its program fixes, so a creator cannot keep the ability to mint more or freeze holders. The checks run for every other token.
+pump.fun creates curve mints itself, with authorities its program fixes, so a creator cannot keep the ability to mint more or freeze holders. That is why the bot buys only on the curve and needs no authority checks.
 
 Rugcheck rarely has a report for a token minutes old inside a 150 ms budget, so `safety.rugcheck: "advisory"` rejects only on a danger result that arrives in time, and `"required"` treats no answer as a failure. Market data from DexScreener can also lag a new launch; a rule with a market filter and `onMissingData: "reject"` skips tokens it cannot price yet.
 
@@ -40,12 +38,12 @@ Rugcheck rarely has a report for a token minutes old inside a 150 ms budget, so 
 - A pending buy keeps its spend and blocks the mint until its signature confirms, or until its blockhash is proven expired with the signature never seen.
 - One buy per mint, ever: a mint stays bought after the position is sold.
 - `filters.maxSnipes` (1 by default) counts each rule's buys; `filters.cooldownSec` spaces them out.
-- `spend.maxPerTradeSol`, `spend.maxPerHourSol`, and `spend.maxTotalSol` count the largest amount a buy can take from the wallet: the amount, fees, the tip, and account rent. The reservation becomes the actual cost once it is known, and is refunded only when the transaction expired or Jupiter rejected it.
+- `spend.maxPerTradeSol`, `spend.maxPerHourSol`, and `spend.maxTotalSol` count the largest amount a buy can take from the wallet: the amount, fees, the tip, and account rent. The reservation becomes the actual cost once it is known, and is refunded only when the transaction expired. A sell reserves only its fees and tip and is never refused by the caps, so an exit always goes out.
 - `maxSignalAgeMs` (5 seconds) skips posts that arrive late, for example after a reconnect.
 
 ## Exits
 
-Open positions are priced every `exits.pollMs`: pump.fun curve tokens from one account read, others from a Jupiter quote. The bot sells at `takeProfitPct`, `stopLossPct`, or after `maxHoldSec`, and when the post it bought on is deleted (`sellOnDelete`). An exit stays on the position until a sell confirms, so a sell that fails is tried again. A position has one sell in flight at a time. In dry run every exit is logged and nothing is sent.
+Open positions are priced every `exits.pollMs`: from one read of the curve, or from a Jupiter quote once the curve has graduated, and then they are sold through Jupiter. The bot sells at `takeProfitPct`, `stopLossPct`, or after `maxHoldSec`, and when the post it bought on is deleted (`sellOnDelete`). An exit stays on the position until a sell confirms, so a sell that fails is tried again. A position has one sell in flight at a time. In dry run every exit is logged and nothing is sent.
 
 ## Going live
 

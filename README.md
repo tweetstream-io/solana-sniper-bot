@@ -4,7 +4,7 @@
 
 <h1 align="center">Solana sniper bot for X/Twitter signals</h1>
 
-<p align="center">Buys Solana and pump.fun tokens the moment an account you watch posts a contract address, runs on the <a href="https://tweetstream.io/signup?offer=basic-monthly-trial&utm_source=github&utm_medium=referral&utm_campaign=solana-sniper-bot&utm_content=readme-intro">TweetStream</a> real-time feed, and starts in dry run.</p>
+<p align="center">Buys a pump.fun token the moment an account you watch on the <a href="https://tweetstream.io/signup?offer=basic-monthly-trial&utm_source=github&utm_medium=referral&utm_campaign=solana-sniper-bot&utm_content=readme-intro">TweetStream</a> feed posts its contract address.</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license">
@@ -50,9 +50,9 @@ signal    ocr H6oB…ru29 from @demo_dev (tweet/meta twitter:2110186934469918720
 fire      dev-ca: buy H6oB…ru29, CA in image text
 feed      step 6/17: engagement: the KOL retweets a dev post containing an exclude word
 skip      kol-engagement: keyword_exclude_found, "scam" within scan depth 1
-feed      step 14/17: callout: a watched pump.fun caller calls a token; the safety check rejects it
+feed      step 14/17: callout: a watched pump.fun caller calls a token that is not on a pump.fun curve, so it is skipped
 fire      caller: buy AwCd…ro19, callout by demo_caller
-skip      caller AwCd…ro19: mint_authority: the supply can still be increased
+skip      caller AwCd…ro19: unsupported_curve: not a pump.fun curve coin
 feed      step 17/17: exits: the dev deletes the launch post, so the position bought on it is sold
 dry run   would sell FmKE…3DDA (post_deleted)
 summary   first copy of an event came from ultra: 17 times
@@ -135,7 +135,7 @@ The bot is written in TypeScript and Rust (Rust in progress).
 <details>
 <summary>What is a Solana sniper bot?</summary>
 
-A program that buys a token as early as possible after something happens: a launch, a listing, or a post. This one watches X/Twitter, pump.fun callouts, and FOMO through TweetStream, and buys on Solana, mostly pump.fun memecoins.
+A program that buys a token as early as possible after something happens: a launch, a listing, or a post. This one watches X/Twitter, pump.fun callouts, and FOMO through TweetStream, and buys pump.fun memecoins on Solana while they are still on their bonding curve.
 
 </details>
 
