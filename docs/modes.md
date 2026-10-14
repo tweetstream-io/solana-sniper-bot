@@ -4,7 +4,7 @@ Each rule in `config.json` has one `mode`. The examples below are complete rules
 
 Account fields take a numeric X account id (`"44196397"`) or a handle (`"@name"`). Prefer ids: a handle can be renamed or taken over by someone else, and the bot warns at startup for every handle it watches. The accounts must also be tracked in your TweetStream dashboard, or no events arrive for them.
 
-Every mode can buy (`"action": "buy"`, spending `amountSol`) or sell the whole position in a token (`"action": "sell"`). Before anything is sent, the rule's filters and the safety checks run; see [safety.md](safety.md).
+Every mode buys, spending `amountSol`. Before anything is sent, the rule's filters and the safety checks run; see [safety.md](safety.md). Selling is the exits' job: take profit, stop loss, time limit, and a delete of the post the bot bought on.
 
 ## ca_scanner
 
@@ -64,7 +64,7 @@ Use it when an account following someone is the signal, for example a developer 
 { "name": "follow-bio", "mode": "follow", "accounts": ["44196397"], "useDetectedCa": true, "token": { "amountSol": 0.05 } }
 ```
 
-It listens to `account/follow` and `account/unfollow` (`followEvents`), optionally only for some followed accounts (`targets`). With `useDetectedCa` it buys the first address in the followed account's bio or website when the event includes the bio. When it does not, the rule logs `bio_not_in_payload`; this example does not call a profile lookup API. An unfollow with `"action": "sell"` exits a position.
+It listens to `account/follow` and `account/unfollow` (`followEvents`), optionally only for some followed accounts (`targets`). With `useDetectedCa` it buys the first address in the followed account's bio or website when the event includes the bio. When it does not, the rule logs `bio_not_in_payload`; this example does not call a profile lookup API.
 
 ## pfp_update
 
@@ -86,7 +86,7 @@ Use it to follow pump.fun callers: when a caller you track calls a token, buy th
 
 It listens to `account/callout`. Add the callers in the dashboard's Callouts tab too. `calloutKinds` chooses which posts count (`callout` by default; `author_update`, `reply`, and `repost` are later posts about an earlier call). `maxMultiple` skips a call when the event says the token already ran past that multiple. `requireCallerPosition` fires only when the event shows the caller holding the token. The callout's own market cap feeds the `maxMarketCapUsd` filter.
 
-`account/callout_update` only adds detail to an earlier call, so it never buys. With `sellWhenCallerExits`, an update or callout from the same caller that reports `position.amountHeld` of 0 sells what this rule bought because of that caller, including a buy still in flight. Callouts are live only.
+`account/callout_update` only adds detail to an earlier call, so it never buys. Callouts are live only.
 
 ## fomo
 
@@ -96,4 +96,4 @@ Use it to follow FOMO users or coins: a thesis from a user you track, any thesis
 { "name": "fomo-theses", "mode": "fomo", "fomoUsers": ["username"], "fomoCoins": [], "fomoEvents": ["thesis"], "excludeKeywords": { "words": ["exit"], "scanDepth": 0 }, "token": { "amountSol": 0.05 } }
 ```
 
-It listens to `account/thesis` and `account/token_verified`. Track users and coins in the dashboard's FOMO tab too. Keyword filters read the thesis text. `token_verified` fires only for coins in `fomoCoins`, once per coin; TweetStream reports when it first observed the verification, which is not a safety or investment signal. With `sellWhenAuthorExits`, a thesis from a watched author that reports `position.closedAt` sells what this rule bought because of that author, and never buys. FOMO events are live only.
+It listens to `account/thesis` and `account/token_verified`. Track users and coins in the dashboard's FOMO tab too. Keyword filters read the thesis text. `token_verified` fires only for coins in `fomoCoins`, once per coin; TweetStream reports when it first observed the verification, which is not a safety or investment signal. A thesis that reports `position.closedAt` never buys. FOMO events are live only.

@@ -31,16 +31,13 @@ Each entry in `rules` has one `mode`. A rule reads only the fields for its mode;
 | `rules[].calloutKinds` | `["callout"]` | callout: which callout kinds fire the rule. author_update, reply and repost are later posts about an earlier call. |  |
 | `rules[].maxMultiple` | `null` | callout: skip when the event reports the token already ran more than this multiple since the call. null turns it off. | Safety: buying after a 5x run buys someone else's exit. |
 | `rules[].requireCallerPosition` | `false` | callout: fire only when the event reports that the caller holds the token (position.amountHeld above 0). |  |
-| `rules[].sellWhenCallerExits` | `false` | callout: sell what this rule bought because of a caller when a callout or callout_update from that caller reports position.amountHeld of 0. |  |
 | `rules[].fomoUsers` | `[]` | fomo: FOMO usernames or author ids whose theses fire the rule. Track them in the dashboard's FOMO tab too. |  |
 | `rules[].fomoCoins` | `[]` | fomo: coin addresses. A thesis by any author on one of these fires the rule, and so does the coin's first observed verification. |  |
 | `rules[].fomoEvents` | `["thesis"]` | fomo: fire on theses, on first observed token verification of a watched coin, or both. |  |
-| `rules[].sellWhenAuthorExits` | `false` | fomo: sell what this rule bought because of an author when that author's thesis on the coin reports position.closedAt. |  |
 | `rules[].useDetectedCa` | `false` | engagement, new_tweet, follow, pfp_update: trade the first contract address found in the event (post text, token link, image text, the followed account's bio, or the new bio) when token.mint is empty. |  |
 | `rules[].token.mint` | `""` | The token to trade. ca_scanner, callout and fomo: leave empty to trade the address in the event, or set it to act only on that token. Other modes: required unless useDetectedCa is true. |  |
-| `rules[].token.action` | `"buy"` | buy spends amountSol. sell sells the whole position in this token. |  |
-| `rules[].token.amountSol` | `0.01` | SOL to spend per buy. | Also capped by spend.maxPerTradeSol. |
-| `rules[].filters.maxSnipes` | `1` | How many times this rule may trade. 0 means no limit. | Safety: caps losses from a rule that fires on a compromised account. |
+| `rules[].token.amountSol` | `0.01` | SOL to spend on the buy. | Also capped by spend.maxPerTradeSol. |
+| `rules[].filters.maxSnipes` | `1` | How many tokens this rule may buy, counted from the buys in the state file. 0 means no limit. | Safety: caps losses from a rule that fires on a compromised account. |
 | `rules[].filters.cooldownSec` | `0` | Seconds to wait after this rule fires before it may fire again. | Safety: stops a burst of posts from buying many tokens. |
 | `rules[].filters.minTokenAgeSec` | `null` | Skip tokens younger than this. null turns the check off. | Needs market data; see onMissingData. |
 | `rules[].filters.maxTokenAgeSec` | `null` | Skip tokens older than this. null turns the check off. | Needs market data; see onMissingData. |
@@ -50,14 +47,11 @@ Each entry in `rules` has one `mode`. A rule reads only the fields for its mode;
 | `rules[].filters.maxPoolTaxPct` | `0` | Skip tokens whose transfer fee is above this percent. null turns the check off. | Read from the mint account, so it costs no extra request. |
 | `rules[].filters.platforms` | `[]` | Venues this rule may trade on, such as pumpfun, pumpswap, raydium, meteora, orca, moonshot. Empty allows any. | pumpfun is built locally; every other venue goes through Jupiter. |
 | `rules[].filters.skipSuspiciousPools` | `false` | Skip tokens that the safety check service flags as dangerous. | Needs safety.rugcheck turned on. |
-| `rules[].filters.skipIfAlreadyBought` | `true` | Skip a mint this bot already bought, even after a restart. | Safety: stops repeat buys from repeated posts. |
-| `rules[].filters.skipIfAlreadyHolding` | `true` | Skip a mint the bot still holds. |  |
 | `rules[].filters.onMissingData` | `"reject"` | What to do when a filter needs data that is not available in time. | reject is the safe choice: unknown never counts as passing. |
 | `rules[].fees.slippagePct` | `20` | Largest price move you accept, in percent. | Too low and fast-moving launches fail; too high and you overpay. |
 | `rules[].fees.priorityFeeSol` | `"auto"` | Priority fee for the whole transaction in SOL, or auto for a recent-fee estimate. | auto reads a cached estimate refreshed in the background, so it adds no latency. The whole fee counts against the spend caps. |
 | `rules[].fees.tipSol` | `"auto"` | Tip paid to the Jito block engine in SOL, or auto for the recent landed-tip level. | Only paid when antiMev is on. |
-| `rules[].fees.antiMev` | `true` | Send only through the Jito block engine, with a tip, which protects the transaction from sandwiching. Off: send to every RPC and extra sender instead. | Jupiter trades are landed by Jupiter and ignore this. |
-| `rules[].fees.retriesOnGraduation` | `1` | If a pump.fun coin finishes its bonding curve while you buy, retry this many times through Jupiter. | Retries only after a definite failure, never after an unknown outcome. |
+| `rules[].fees.antiMev` | `true` | Send only through the Jito block engine, with a tip, which protects the transaction from sandwiching. Off: send to the RPC URLs instead. | Jupiter trades are landed by Jupiter and ignore this. |
 
 ## Everything else
 
@@ -80,15 +74,9 @@ Each entry in `rules` has one `mode`. A rule reads only the fields for its mode;
 | `exits.pollMs` | `2000` | How often to price open positions. | Each poll is one RPC read per pump.fun position, one quote per other position. |
 | `exits.sellOnDelete` | `true` | Sell when the post that triggered the buy is deleted. |  |
 | `exits.sellSlippagePct` | `30` | Slippage for exit sells, in percent. |  |
-| `execution.pumpBuilder` | `"local"` | local builds pump.fun buys in process. pumpportal asks the PumpPortal API to build them. | local saves one HTTPS round trip per buy. |
 | `execution.computeUnitLimit` | `120000` | Compute unit limit for locally built pump.fun trades. | A tight limit makes the priority fee per unit higher for the same SOL. |
 | `execution.maxAutoPriorityFeeSol` | `0.005` | Ceiling for priorityFeeSol auto. |  |
 | `execution.maxAutoTipSol` | `0.005` | Ceiling for tipSol auto. |  |
 | `execution.blockhashRefreshMs` | `400` | How often the background loop fetches a fresh blockhash. | Latency: keeps the blockhash fetch off the hot path. |
-| `execution.rebroadcastMs` | `1500` | How often an unconfirmed transaction is sent again to every sender. |  |
+| `execution.rebroadcastMs` | `1500` | How often an unconfirmed transaction is sent again. |  |
 | `execution.confirmTimeoutMs` | `60000` | Give up waiting for confirmation after this long and mark the outcome unknown. |  |
-| `senders` | `[]` | Extra JSON-RPC sendTransaction endpoints, such as a staked low-latency sender. The same signed transaction goes to every sender. |  |
-| `senders[].name` |  | Name used in logs and the latency report. |  |
-| `senders[].urlEnv` |  | Name of the environment variable that holds the URL, so API keys stay in .env. |  |
-| `senders[].tipAccounts` | `[]` | If the sender requires a tip, its tip accounts. One is picked at random per transaction. |  |
-| `senders[].tipSol` | `0` | Tip for this sender, in SOL. Paid whichever sender lands the transaction. |  |
