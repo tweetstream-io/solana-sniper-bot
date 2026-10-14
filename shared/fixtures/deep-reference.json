@@ -1,0 +1,156 @@
+{
+  "name": "deep-reference",
+  "description": "Reference chains run up to seven levels. An address five levels down is found, and a keyword six levels down matches a scanDepth of 6.",
+  "config": {
+    "rules": [
+      {
+        "name": "scan",
+        "mode": "ca_scanner",
+        "accounts": [
+          "111"
+        ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      },
+      {
+        "name": "deep-keyword",
+        "mode": "new_tweet",
+        "accounts": [
+          "111"
+        ],
+        "events": [
+          "quote"
+        ],
+        "includeKeywords": {
+          "words": [
+            "rocket"
+          ],
+          "scanDepth": 6
+        },
+        "token": {
+          "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19"
+        },
+        "filters": {
+          "maxSnipes": 0
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000020100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000020100,
+        "id": "2026541082342326272",
+        "d": {
+          "tweetId": "2026541082342326272",
+          "text": "look at this",
+          "createdAt": 1772000020000,
+          "kind": "quote",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "ref": {
+            "type": "quote",
+            "tweetId": "2026541078148022272",
+            "author": {
+              "id": "301",
+              "handle": "@level1"
+            },
+            "text": "level 1",
+            "quoted": {
+              "type": "quote",
+              "tweetId": "2026541073953718272",
+              "author": {
+                "id": "302",
+                "handle": "@level2"
+              },
+              "text": "level 2",
+              "quoted": {
+                "type": "quote",
+                "tweetId": "2026541069759414272",
+                "author": {
+                  "id": "303",
+                  "handle": "@level3"
+                },
+                "text": "level 3",
+                "quoted": {
+                  "type": "quote",
+                  "tweetId": "2026541065565110272",
+                  "author": {
+                    "id": "304",
+                    "handle": "@level4"
+                  },
+                  "text": "level 4",
+                  "quoted": {
+                    "type": "quote",
+                    "tweetId": "2026541061370806272",
+                    "author": {
+                      "id": "305",
+                      "handle": "@level5"
+                    },
+                    "text": "deep 7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+                    "quoted": {
+                      "type": "quote",
+                      "tweetId": "2026541057176502272",
+                      "author": {
+                        "id": "306",
+                        "handle": "@level6"
+                      },
+                      "text": "rocket",
+                      "quoted": {
+                        "type": "quote",
+                        "tweetId": "2026541052982198272",
+                        "author": {
+                          "id": "307",
+                          "handle": "@level7"
+                        },
+                        "text": "level 7"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "expectedSignals": [
+    {
+      "event": "tweet/content twitter:2026541082342326272",
+      "source": "reference",
+      "chain": "solana",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "confidence": "medium",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "tweet/content twitter:2026541082342326272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "source": "reference"
+    },
+    {
+      "event": "tweet/content twitter:2026541082342326272",
+      "rule": "deep-keyword",
+      "decision": "fire",
+      "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+      "source": null
+    }
+  ]
+}

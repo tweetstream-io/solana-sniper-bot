@@ -1,6 +1,6 @@
 {
   "name": "update-merging",
-  "description": "tweet/update patches the stored post: a completion reveals a CA, a repeated update fires nothing new, a new ref replaces the old one, and an update that arrives before its content still wins.",
+  "description": "tweet/update patches the stored post: a completion reveals a CA, an update repeated with the same payload is a copy and produces nothing, a new ref replaces the old one, and an update that arrives before its content still wins.",
   "config": {
     "rules": [
       {
@@ -128,18 +128,6 @@
     }
   ],
   "expectedSignals": [
-    {
-      "event": "tweet/update twitter:2026541002650550272",
-      "source": "text",
-      "chain": "solana",
-      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
-      "confidence": "high",
-      "actor": {
-        "namespace": "x",
-        "id": "111",
-        "handle": "dev_one"
-      }
-    },
     {
       "event": "tweet/update twitter:2026541002650550272",
       "source": "text",

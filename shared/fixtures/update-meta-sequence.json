@@ -1,0 +1,268 @@
+{
+  "name": "update-meta-sequence",
+  "description": "The server gives every tweet/update and tweet/meta of a post the same envelope id (the tweetId), so later updates and snapshots are new events. A copy that repeats the payload on the other connection, with a different envelope ts, is dropped. The completion's address and the second snapshot's image address each fire once.",
+  "config": {
+    "rules": [
+      {
+        "name": "scan",
+        "mode": "ca_scanner",
+        "accounts": [
+          "111"
+        ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000010050,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000010050,
+        "id": "2026541040399286272",
+        "d": {
+          "tweetId": "2026541040399286272",
+          "text": "Launching soon",
+          "createdAt": 1772000010000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000010053,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000010053,
+        "id": "2026541040399286272",
+        "d": {
+          "tweetId": "2026541040399286272",
+          "text": "Launching soon",
+          "createdAt": 1772000010000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000010200,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "update",
+        "ts": 1772000010200,
+        "id": "2026541040399286272",
+        "d": {
+          "tweetId": "2026541040399286272",
+          "platform": "twitter",
+          "text": "Launching soon, CA in thread"
+        }
+      }
+    },
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000010300,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "update",
+        "ts": 1772000010300,
+        "id": "2026541040399286272",
+        "d": {
+          "tweetId": "2026541040399286272",
+          "platform": "twitter",
+          "text": "Launching soon, CA in thread: FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+          "textUpdateType": "completion"
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000010304,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "update",
+        "ts": 1772000010304,
+        "id": "2026541040399286272",
+        "d": {
+          "tweetId": "2026541040399286272",
+          "platform": "twitter",
+          "text": "Launching soon, CA in thread: FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+          "textUpdateType": "completion"
+        }
+      }
+    },
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000010400,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "update",
+        "ts": 1772000010400,
+        "id": "2026541040399286272",
+        "d": {
+          "tweetId": "2026541040399286272",
+          "platform": "twitter",
+          "ref": {
+            "type": "quote",
+            "tweetId": "2026541019427766272",
+            "author": {
+              "id": "222",
+              "handle": "@friend"
+            },
+            "text": "gm"
+          }
+        }
+      }
+    },
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000010500,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "meta",
+        "ts": 1772000010500,
+        "id": "2026541040399286272",
+        "d": {
+          "tweetId": "2026541040399286272",
+          "platform": "twitter",
+          "ocr": {
+            "text": "no address in this picture"
+          }
+        }
+      }
+    },
+    {
+      "connection": "ultra",
+      "receivedAtMs": 1772000010600,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "meta",
+        "ts": 1772000010600,
+        "id": "2026541040399286272",
+        "d": {
+          "tweetId": "2026541040399286272",
+          "platform": "twitter",
+          "ocr": {
+            "text": "contract H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000010603,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "meta",
+        "ts": 1772000010603,
+        "id": "2026541040399286272",
+        "d": {
+          "tweetId": "2026541040399286272",
+          "platform": "twitter",
+          "ocr": {
+            "text": "contract H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29"
+          }
+        }
+      }
+    }
+  ],
+  "expectedSignals": [
+    {
+      "event": "tweet/update twitter:2026541040399286272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/update twitter:2026541040399286272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/meta twitter:2026541040399286272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/meta twitter:2026541040399286272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/meta twitter:2026541040399286272",
+      "source": "ocr",
+      "chain": "solana",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "confidence": "medium",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "tweet/update twitter:2026541040399286272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "source": "text"
+    },
+    {
+      "event": "tweet/meta twitter:2026541040399286272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "source": "ocr"
+    }
+  ]
+}

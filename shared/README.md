@@ -63,7 +63,7 @@ Contract addresses, from `addresses.json`:
 - Token links in free text match `linkInText` (case-insensitive); trailing `stripTrailing` characters are removed before parsing. A link (from the text or from a `urls[].url`) is parsed as a URL (prefixing `https://` when it has no scheme); the first entry of `links` whose `host` matches the lowercased hostname and whose `path` matches the path gives the mint from capture group 1, with that entry's `confidence`.
 - Within one text, addresses are reported in order of first appearance (a link's position is where the link starts), one per address. When an address appears both inside a link and bare, the link's kind and confidence are used.
 
-Keywords: a word matches when it appears without case (Unicode case folding) and the characters before and after it are not letters, digits, or `_` (or it is at the edge of the text). `scanDepth` 0 reads only the account's own text; depth n also reads n levels of referenced posts (level 1 is `ref`; level n+1 is each level-n post's `quoted` and `subtweet`; at most 4 levels in total).
+Keywords: a word matches when it appears without case (Unicode case folding) and the characters before and after it are not letters, digits, or `_` (or it is at the edge of the text). `scanDepth` 0 reads only the account's own text; depth n also reads n levels of referenced posts (level 1 is `ref`; level n+1 is each level-n post's `quoted` and `subtweet`; at most 7 levels in total, the depth the server sends).
 
 Accounts:
 
@@ -84,7 +84,7 @@ Which activities each mode listens to (the rest of a mode's behavior is in [docs
 | `callout` | callouts and callout updates | `callers` |
 | `fomo` | theses and token verifications | `fomoUsers`, or the coin in `fomoCoins` |
 
-Payload checks: before detection, the bot checks the fields it reads for that pair (for example `tweetId`, `author`, and `kind` on `tweet/content`; `eventId` on follows and profile updates; `caller.username`, `token.address`, and `calloutId` on callouts). `tweet/content` needs a `kind`, and a `tweet/update` that carries one needs a valid one; there is no default. Every value in a profile update's `changes` and `previous` must be a string or `null`. An event that fails a check is skipped with the field's name in the log, produces no signals and no decisions, and does not stop later events.
+Payload checks: before detection, the bot checks the fields it reads for that pair (for example `tweetId`, `author`, and `kind` on `tweet/content`; `eventId` on follows and profile updates; `caller.username`, `token.address`, and `calloutId` on callouts). `tweet/content` needs a `kind`, and a `tweet/update` that carries one needs a valid one; there is no default. In a profile update's `changes` and `previous`, `verifiedLabel` must be `null` or an object (`{badge, description, url}`), and every other value a string or `null`. An event that fails a check is skipped with the field's name in the log, produces no signals and no decisions, and does not stop later events.
 
 ## Signal JSON
 
@@ -125,7 +125,7 @@ What each rule did with an event. A rule the event does not concern produces not
 - Order within one event: all `fire`, then all `skip`, then all `exit`. Within each group, rules in config order; within a rule, signals in signal order.
 - A rule fires at most once per post (`engagement`, `new_tweet` on posts), per event (`follow`, `pfp_update`, `new_tweet` on bios), or per mint (`ca_scanner`, `callout`, `fomo`). A repeat is silent. A skip does not use up that chance.
 - `maxSnipes` (0 = no limit) counts a rule's buys (see Trade state) and `cooldownSec` spaces out its fires. A fire that sends nothing is given back: its snipe and its fire-once key are released.
-- A repeated event produces nothing, whichever connection it came on: `tweet/update` and `tweet/meta` repeat by envelope `id` (never deduplicated without one); events with `d.eventId` repeat by that id; every other event repeats by its `event` key, and an event whose key is empty is never deduplicated.
+- A repeated event produces nothing, whichever connection it came on. An event repeats when its `t`, its `op`, and its payload `d` equal an earlier event's. Compare `d` as a JSON value, so key order does not matter. The envelope `ts` and `id` play no part: the Ultra and standard copies of one event differ only in `ts`, and the server gives every `tweet/update` and `tweet/meta` of a post the same `id`.
 
 ## Trade state
 

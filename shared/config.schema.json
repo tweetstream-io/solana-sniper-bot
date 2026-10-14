@@ -218,8 +218,8 @@
         "scanDepth": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 4,
-          "description": "0 reads only the account's own text. 1 also reads the post it quotes, replies to, or reposts. 2 goes one level deeper."
+          "maximum": 7,
+          "description": "0 reads only the account's own text. 1 also reads the post it quotes, replies to, or reposts. Each step goes one level deeper, up to 7."
         }
       },
       "default": {

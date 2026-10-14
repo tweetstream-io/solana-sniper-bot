@@ -1,6 +1,6 @@
 {
   "name": "profile-ca",
-  "description": "CA scanner on profile changes: only addresses new compared with the previous value fire; without a previous value the signal has low confidence.",
+  "description": "CA scanner on profile changes: only addresses new compared with the previous value fire; without a previous value the signal has low confidence. A change that also carries the verified label object is read normally.",
   "config": {
     "rules": [
       {
@@ -119,6 +119,38 @@
         },
         "id": "p-4"
       }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": 1772000001000,
+        "id": "p-5",
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "changes": {
+            "bio": "Live now: AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+            "verifiedLabel": {
+              "badge": null,
+              "description": "Verified account",
+              "url": "https://x.com/verified"
+            }
+          },
+          "previous": {
+            "bio": "Token: FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA and H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+            "verifiedLabel": null
+          },
+          "eventId": "p-5",
+          "kind": "PROFILE",
+          "observedAt": 1772000001000
+        }
+      }
     }
   ],
   "expectedSignals": [
@@ -169,6 +201,18 @@
         "id": "111",
         "handle": "dev_one"
       }
+    },
+    {
+      "event": "account/profile_update p-5",
+      "source": "profile",
+      "chain": "solana",
+      "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
     }
   ],
   "expectedDecisions": [
@@ -198,6 +242,13 @@
       "rule": "profile",
       "decision": "skip",
       "code": "low_confidence"
+    },
+    {
+      "event": "account/profile_update p-5",
+      "rule": "profile",
+      "decision": "fire",
+      "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
+      "source": "profile"
     }
   ]
 }
