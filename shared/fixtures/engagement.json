@@ -192,7 +192,6 @@
       "rule": "target-id",
       "decision": "fire",
       "mint": "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3",
-      "action": "buy",
       "source": null
     },
     {
@@ -200,7 +199,6 @@
       "rule": "depth0",
       "decision": "fire",
       "mint": "jqwr76eubixztvn3ka2NW4Ewxb5JZs8skn1ju1oa4Qm",
-      "action": "buy",
       "source": null
     },
     {
@@ -214,7 +212,6 @@
       "rule": "reacted-to",
       "decision": "fire",
       "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
-      "action": "buy",
       "source": null
     }
   ]

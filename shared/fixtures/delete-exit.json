@@ -19,12 +19,7 @@
     {
       "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
       "postKey": "twitter:2026541002650550272",
-      "rule": "scan",
-      "actor": {
-        "namespace": "x",
-        "id": "111",
-        "handle": "dev_one"
-      }
+      "rule": "scan"
     }
   ],
   "events": [

@@ -137,7 +137,6 @@
       "rule": "scan",
       "decision": "fire",
       "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
-      "action": "buy",
       "source": "text"
     },
     {
@@ -145,7 +144,6 @@
       "rule": "scan",
       "decision": "fire",
       "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
-      "action": "buy",
       "source": "ocr"
     }
   ]

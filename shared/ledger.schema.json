@@ -1,339 +1,120 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Trade state file",
-  "description": "state/live.json and state/dry-run.json. Both bots read and write this format; see shared/README.md, section Trade state.",
+  "title": "TweetStream sniper state file",
+  "description": "state/live.json or state/dry-run.json. Rules in shared/README.md, section Trade state. Lamport amounts are decimal strings, times are Unix milliseconds.",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "version",
-    "mode",
-    "snipes",
-    "spend",
-    "purchases",
-    "trades",
-    "positions"
-  ],
+  "required": ["version", "mode", "purchases", "spend", "positions", "pending"],
   "properties": {
-    "version": {
-      "const": 1
-    },
-    "mode": {
-      "enum": [
-        "live",
-        "dry_run"
-      ]
-    },
-    "snipes": {
+    "version": { "const": 2 },
+    "mode": { "enum": ["live", "dry_run"] },
+    "purchases": {
+      "description": "Every mint the bot bought, by mint. A mint is bought at most once per state file.",
       "type": "object",
       "additionalProperties": {
-        "type": "integer",
-        "minimum": 0
-      },
-      "description": "Rule name -> fires used."
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rule", "at"],
+        "properties": {
+          "rule": { "type": "string" },
+          "at": { "$ref": "#/$defs/time" }
+        }
+      }
     },
     "spend": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "totalLamports",
-        "recent"
-      ],
+      "required": ["totalLamports", "recent"],
       "properties": {
-        "totalLamports": {
-          "type": "string",
-          "pattern": "^-?[0-9]+$",
-          "description": "Lamports as a decimal string."
-        },
+        "totalLamports": { "$ref": "#/$defs/lamports" },
         "recent": {
+          "description": "Buys of the last hour, for spend.maxPerHourSol.",
           "type": "array",
-          "description": "Spend in the last hour, one entry per buy trade.",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "tradeId",
-              "at",
-              "lamports"
-            ],
+            "required": ["tradeId", "at", "lamports"],
             "properties": {
-              "tradeId": {
-                "type": "string"
-              },
-              "at": {
-                "type": "integer"
-              },
-              "lamports": {
-                "type": "string",
-                "pattern": "^-?[0-9]+$",
-                "description": "Lamports as a decimal string."
+              "tradeId": { "type": "string" },
+              "at": { "$ref": "#/$defs/time" },
+              "lamports": { "$ref": "#/$defs/lamports" }
+            }
+          }
+        }
+      }
+    },
+    "positions": {
+      "description": "Tokens the bot holds, by mint.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rule", "trigger", "route", "tokenProgram", "openedAt", "costLamports", "tokenAmount", "pendingExits"],
+        "properties": {
+          "rule": { "type": "string" },
+          "trigger": { "$ref": "#/$defs/trigger" },
+          "route": { "enum": ["pump", "jupiter"] },
+          "tokenProgram": { "type": "string" },
+          "openedAt": { "$ref": "#/$defs/time" },
+          "costLamports": { "$ref": "#/$defs/lamports" },
+          "tokenAmount": {
+            "description": "Raw token units held; null until a balance read returns more than 0.",
+            "oneOf": [{ "$ref": "#/$defs/lamports" }, { "type": "null" }]
+          },
+          "pendingExits": {
+            "description": "Exits waiting for a sell to confirm.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["code", "at"],
+              "properties": {
+                "code": { "type": "string" },
+                "at": { "$ref": "#/$defs/time" }
               }
             }
           }
         }
       }
     },
-    "purchases": {
+    "pending": {
+      "description": "Trades written before sending whose outcome is not known yet, by trade id.",
       "type": "object",
-      "description": "Mint -> first buy that confirmed or may have landed. Kept after the position is sold.",
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "firstAt",
-          "tradeId"
-        ],
+        "required": ["side", "mint", "route", "signature", "blockhash", "lastValidBlockHeight", "reservedLamports", "amountLamports", "rule", "trigger", "tokenProgram", "sentAt"],
         "properties": {
-          "firstAt": {
-            "type": "integer"
+          "side": { "enum": ["buy", "sell"] },
+          "mint": { "type": "string" },
+          "route": { "enum": ["pump", "jupiter"] },
+          "signature": {
+            "description": "null only when Jupiter returned no signature and the signed transaction had none of ours: it waits for manual review.",
+            "type": ["string", "null"]
           },
-          "tradeId": {
-            "type": "string"
-          }
+          "blockhash": { "type": "string" },
+          "lastValidBlockHeight": { "type": ["integer", "null"] },
+          "reservedLamports": { "description": "Largest possible wallet debit, held against the spend caps; 0 for a sell.", "$ref": "#/$defs/lamports" },
+          "amountLamports": { "description": "What a buy spends on the token, which becomes the position's cost; 0 for a sell.", "$ref": "#/$defs/lamports" },
+          "rule": { "type": "string" },
+          "trigger": { "$ref": "#/$defs/trigger" },
+          "tokenProgram": { "type": "string" },
+          "sentAt": { "$ref": "#/$defs/time" }
         }
-      }
-    },
-    "trades": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/trade"
-      }
-    },
-    "positions": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/position"
       }
     }
   },
   "$defs": {
-    "actor": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "namespace"
-      ],
-      "properties": {
-        "namespace": {
-          "enum": [
-            "x",
-            "truth_social",
-            "binance_square",
-            "pump_fun",
-            "fomo",
-            "none"
-          ]
-        },
-        "id": {
-          "type": "string"
-        },
-        "handle": {
-          "type": "string"
-        }
-      }
-    },
+    "lamports": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" },
+    "time": { "type": "integer", "minimum": 0 },
     "trigger": {
+      "description": "The event a buy came from; postKey lets a delete of that post sell it.",
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "rule",
-        "fireKey",
-        "eventRef",
-        "actor"
-      ],
+      "required": ["eventRef"],
       "properties": {
-        "rule": {
-          "type": "string"
-        },
-        "fireKey": {
-          "type": "string"
-        },
-        "eventRef": {
-          "type": "string"
-        },
-        "postKey": {
-          "type": "string"
-        },
-        "actor": {
-          "$ref": "#/$defs/actor"
-        }
-      }
-    },
-    "trade": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "id",
-        "side",
-        "mint",
-        "route",
-        "state",
-        "createdAt",
-        "trigger",
-        "reservedLamports",
-        "feeBudgetLamports",
-        "exitIntents"
-      ],
-      "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "side": {
-          "enum": [
-            "buy",
-            "sell"
-          ]
-        },
-        "mint": {
-          "type": "string"
-        },
-        "route": {
-          "enum": [
-            "pump",
-            "pumpportal",
-            "jupiter",
-            "dry_run"
-          ]
-        },
-        "state": {
-          "enum": [
-            "reserved",
-            "sending",
-            "confirmed",
-            "failed",
-            "unknown",
-            "reconciled"
-          ]
-        },
-        "createdAt": {
-          "type": "integer"
-        },
-        "trigger": {
-          "$ref": "#/$defs/trigger"
-        },
-        "reservedLamports": {
-          "type": "string",
-          "pattern": "^-?[0-9]+$",
-          "description": "Largest possible wallet debit, held against the spend caps (0 for sells)."
-        },
-        "feeBudgetLamports": {
-          "type": "string",
-          "pattern": "^-?[0-9]+$",
-          "description": "The part of reservedLamports that a transaction that lands and fails can still cost (fees, tips, rent)."
-        },
-        "spentLamports": {
-          "type": "string",
-          "pattern": "^-?[0-9]+$",
-          "description": "Actual debit, once known."
-        },
-        "signature": {
-          "type": "string"
-        },
-        "lastValidBlockHeight": {
-          "type": "integer"
-        },
-        "tx": {
-          "type": "string",
-          "description": "Signed transaction, base64, kept until the trade resolves so a restart can rebroadcast it."
-        },
-        "sentAt": {
-          "type": "integer"
-        },
-        "landed": {
-          "type": "boolean",
-          "description": "Recorded when the trade resolves: whether a transaction landed."
-        },
-        "error": {
-          "type": "string"
-        },
-        "tokenAmount": {
-          "type": "string",
-          "pattern": "^[0-9]+$"
-        },
-        "exitIntents": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "code",
-              "at",
-              "detail"
-            ],
-            "properties": {
-              "code": {
-                "type": "string"
-              },
-              "at": {
-                "type": "integer"
-              },
-              "detail": {
-                "type": "string"
-              }
-            }
-          }
-        },
-        "senders": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Names of the senders the transaction went to; a rebroadcast uses the same ones."
-        }
-      }
-    },
-    "position": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "mint",
-        "route",
-        "tokenProgram",
-        "openedAt",
-        "buyTradeId",
-        "costLamports",
-        "tokenAmount",
-        "trigger"
-      ],
-      "properties": {
-        "mint": {
-          "type": "string"
-        },
-        "route": {
-          "enum": [
-            "pump",
-            "jupiter"
-          ]
-        },
-        "tokenProgram": {
-          "type": "string"
-        },
-        "openedAt": {
-          "type": "integer"
-        },
-        "buyTradeId": {
-          "type": "string"
-        },
-        "costLamports": {
-          "type": "string",
-          "pattern": "^-?[0-9]+$",
-          "description": "Lamports as a decimal string."
-        },
-        "tokenAmount": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^[0-9]+$",
-          "description": "Raw token units; null until a balance read succeeds."
-        },
-        "trigger": {
-          "$ref": "#/$defs/trigger"
-        },
-        "sellTradeId": {
-          "type": "string",
-          "description": "The sell in progress for this position, if any. One at a time."
-        }
+        "eventRef": { "type": "string" },
+        "postKey": { "type": "string" }
       }
     }
   }

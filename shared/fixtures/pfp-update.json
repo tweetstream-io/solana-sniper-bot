@@ -164,7 +164,6 @@
       "rule": "avatar",
       "decision": "fire",
       "mint": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2",
-      "action": "buy",
       "source": null
     },
     {
@@ -172,7 +171,6 @@
       "rule": "banner-or-name",
       "decision": "fire",
       "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
-      "action": "buy",
       "source": null
     }
   ]

@@ -1,6 +1,6 @@
 {
   "name": "callout",
-  "description": "pump.fun callouts: a new call fires, a high multiple and a missing caller position skip, other kinds are ignored, updates never buy, a caller exit sells only what that caller triggered, EVM tokens are not traded.",
+  "description": "pump.fun callouts: a new call fires, a high multiple and a missing caller position skip, other kinds are ignored, updates never buy, EVM tokens are not traded.",
   "config": {
     "rules": [
       {
@@ -9,8 +9,7 @@
         "callers": [
           "CallerOne"
         ],
-        "maxMultiple": 3,
-        "sellWhenCallerExits": true
+        "maxMultiple": 3
       },
       {
         "name": "holder",
@@ -22,24 +21,6 @@
       }
     ]
   },
-  "positions": [
-    {
-      "mint": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2",
-      "rule": "caller",
-      "actor": {
-        "namespace": "pump_fun",
-        "handle": "CallerOne"
-      }
-    },
-    {
-      "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
-      "rule": "caller",
-      "actor": {
-        "namespace": "pump_fun",
-        "handle": "OtherCaller"
-      }
-    }
-  ],
   "events": [
     {
       "connection": "standard",
@@ -374,7 +355,6 @@
       "rule": "caller",
       "decision": "fire",
       "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
-      "action": "buy",
       "source": "callout"
     },
     {
@@ -400,7 +380,6 @@
       "rule": "holder",
       "decision": "fire",
       "mint": "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd",
-      "action": "buy",
       "source": "callout"
     },
     {
@@ -408,13 +387,6 @@
       "rule": "caller",
       "decision": "skip",
       "code": "update_not_new"
-    },
-    {
-      "event": "account/callout_update cu-2",
-      "rule": "caller",
-      "decision": "exit",
-      "mint": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2",
-      "code": "caller_exited"
     },
     {
       "event": "account/callout c-6",

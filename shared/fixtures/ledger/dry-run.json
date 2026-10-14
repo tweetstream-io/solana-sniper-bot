@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "mode": "dry_run",
+  "purchases": {
+    "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA": {
+      "rule": "dev-ca",
+      "at": 1772000000000
+    }
+  },
+  "spend": {
+    "totalLamports": "10000000",
+    "recent": [
+      {
+        "tradeId": "m6x0-0",
+        "at": 1772000000000,
+        "lamports": "10000000"
+      }
+    ]
+  },
+  "positions": {
+    "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA": {
+      "rule": "dev-ca",
+      "trigger": {
+        "eventRef": "tweet/content twitter:2026541002650550272",
+        "postKey": "twitter:2026541002650550272"
+      },
+      "route": "pump",
+      "tokenProgram": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+      "openedAt": 1772000000000,
+      "costLamports": "10000000",
+      "tokenAmount": null,
+      "pendingExits": []
+    }
+  },
+  "pending": {}
+}

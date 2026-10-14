@@ -6,12 +6,14 @@ The TypeScript bot (`ts/`) and the Rust bot (`rust/`) must behave the same way. 
 | --- | --- |
 | `config.schema.json` | the config format and every default |
 | `addresses.json` | contract address extraction: patterns, the 32-byte rule, token link patterns, the denylist |
-| `ledger.schema.json` | the trade state file (`state/live.json`, `state/dry-run.json`) |
+| `ledger.schema.json` | the trade state file (`state/live.json`, `state/dry-run.json`), version 2 |
+| `trading.json` | Jito tip accounts and the Jupiter `/execute` code map |
 | `fixtures/*.json` | event conformance cases: feed events in, signals and rule decisions out |
 | `fixtures/config/*.json` | config conformance cases: defaults filled, errors reported |
+| `fixtures/ledger/*.json` | state files that must load and write back unchanged |
 | `demo/scenario.json`, `demo/config.json` | the scripted feed and config that `npm run demo` uses |
 
-Sections: [Environment](#environment), [Config](#config), [Detection and matching](#detection-and-matching), [Signal JSON](#signal-json), [Decision JSON](#decision-json), [Trade state](#trade-state), [Event fixtures](#event-fixtures), [Demo feed](#demo-feed).
+Sections: [Environment](#environment), [Config](#config), [Detection and matching](#detection-and-matching), [Signal JSON](#signal-json), [Decision JSON](#decision-json), [Trade state](#trade-state), [Money bound](#money-bound), [Event fixtures](#event-fixtures), [Demo feed](#demo-feed).
 
 ## Environment
 
@@ -24,13 +26,12 @@ Both bots read these from the environment, after loading `.env` in the repositor
 | `TWEETSTREAM_WS_URL` | `wss://ws-iad.tweetstream.io/ws` | feed endpoint |
 | `DRY_RUN` | `true` | `true` or `false`; anything else is an error |
 | `WALLET_SECRET_KEY` | none | base58, 64 bytes; required when `DRY_RUN=false` |
-| `SOLANA_RPC_URLS` | `https://api.mainnet-beta.solana.com` | comma separated; the first serves reads |
+| `SOLANA_RPC_URLS` | `https://api.mainnet-beta.solana.com` | comma separated; the first serves reads, every one gets sends |
 | `SOLANA_WS_URL` | first RPC URL with `ws`/`wss` | signature subscriptions |
 | `JITO_URL` | `https://ny.mainnet.block-engine.jito.wtf` | `off` disables Jito |
 | `JUPITER_API_KEY` | none | sent as `x-api-key` |
 | `SNIPER_CONFIG` | `config.json` | config path |
 | `STATE_DIR` | `state` | holds `live.json` and `dry-run.json` |
-| any `senders[].urlEnv` | none | an extra sender's URL; required when that sender is configured |
 
 ## Config
 
@@ -41,7 +42,6 @@ Then run the checks the schema cannot express, in this order:
 1. Rule names are unique (error field `name` on the second rule with the name).
 2. For each enabled rule, in order: `token.mint` and each `fomoCoins` entry, when not empty, decode from base58 to exactly 32 bytes (field `token.mint` or `fomoCoins.<i>`); then `reactor`, `accounts`, `reactedTo`, `targets`, `callers`, `fomoUsers`, in that order, contain no value matching `/^@?YOUR_/i` (field such as `accounts.0`). Disabled rules are not checked, so they may keep placeholders. `config.example.json` ships with a placeholder in its enabled rule on purpose: the bot refuses it until the user puts in a real account.
 3. At least one rule is enabled (rule `null`, field `rules`).
-4. Each `senders[i].tipAccounts[j]` decodes to 32 bytes (rule `null`, field `senders.<i>.tipAccounts.<j>`).
 
 A config error carries `rule` (the rule's name, or `null` outside the rules) and `field` (the dot-separated path inside that rule, or inside the config when `rule` is `null`). For a schema error, the path is the innermost failing value; an unknown field is reported before any other schema error, as the path of the unknown key.
 
@@ -67,7 +67,8 @@ Keywords: a word matches when it appears without case (Unicode case folding) and
 
 Accounts:
 
-- Post authors, follow and profile actors are X accounts (`namespace` `x`) when `platform` is absent or `twitter`; otherwise the namespace is the platform (`truth_social`, `binance_square`). Rule account specs only match namespace `x`: a numeric spec matches `id`, any other spec matches the handle without its leading `@` and without case.
+- Every account is qualified by its own platform. A post author's platform is `author.platform`, else the event's `d.platform`, else `twitter`; for `tweet/update` and `tweet/meta` the event's platform is the platform in the post key. A referenced post's author uses `ref.author.platform`, else the outer author's platform. A follow or profile actor uses `actor.platform`, else `twitter`; a follow target uses `target.platform`, else the actor's platform.
+- The namespace is `x` for `twitter`, otherwise the platform (`truth_social`, `binance_square`). Rule account specs (`accounts`, `reactor`, `reactedTo`, `targets`) only match namespace `x`: a numeric spec matches `id`, any other spec matches the handle without its leading `@` and without case.
 - pump.fun callers match `callers` by username, FOMO authors match `fomoUsers` by id or username, both without case. FOMO coins match `fomoCoins` exactly.
 - Profile baselines are kept per `(platform, id)`. A field's previous value is the event's `previous` value for that field when present, else the last value seen for that account, from earlier profile updates (`changes`) or post authors (`bio`, `name`, `handle`). The same baseline decides which fields changed (a field changed when its new value differs) and which addresses are new.
 
@@ -83,7 +84,7 @@ Which activities each mode listens to (the rest of a mode's behavior is in [docs
 | `callout` | callouts and callout updates | `callers` |
 | `fomo` | theses and token verifications | `fomoUsers`, or the coin in `fomoCoins` |
 
-Malformed payloads: an event whose payload lacks a field asyncapi.json marks required for that pair (for example `tweetId`, `author`, and `kind` on `tweet/content`; `eventId` on follows and profile updates; `caller.username`, `token.address`, and `calloutId` on callouts) produces no signals and no decisions, and does not stop later events.
+Payload checks: before detection, the bot checks the fields it reads for that pair (for example `tweetId`, `author`, and `kind` on `tweet/content`; `eventId` on follows and profile updates; `caller.username`, `token.address`, and `calloutId` on callouts). An event missing one is skipped with the field's name in the log, produces no signals and no decisions, and does not stop later events.
 
 ## Signal JSON
 
@@ -112,58 +113,84 @@ Signals per event, in this order, one per address:
 What each rule did with an event. A rule the event does not concern produces nothing.
 
 ```json
-{ "event": "tweet/content twitter:...", "rule": "dev-ca", "decision": "fire", "mint": "...", "action": "buy", "source": "text" }
+{ "event": "tweet/content twitter:...", "rule": "dev-ca", "decision": "fire", "mint": "...", "source": "text" }
 { "event": "tweet/content twitter:...", "rule": "dev-ca", "decision": "skip", "code": "low_confidence" }
 { "event": "tweet/delete twitter:...", "decision": "exit", "mint": "...", "code": "post_deleted" }
-{ "event": "account/thesis th-5", "rule": "fomo", "decision": "exit", "mint": "...", "code": "author_exited" }
 ```
 
 - `fire`: `source` is the signal source that supplied the mint, or `null` when the rule names `token.mint`.
 - `skip` codes: `stale_post`, `keyword_include_missing`, `keyword_exclude_found`, `no_contract_address`, `evm_not_supported`, `low_confidence`, `mint_not_in_bio`, `bio_not_in_payload`, `update_not_new`, `multiple_too_high`, `caller_not_holding`, `cooldown`, `max_snipes`.
 - `stale_post`: when a post is older than `maxSignalAgeMs` at receipt, each rule whose matcher would have fired or skipped reports one `stale_post` instead. Rules the event does not concern stay silent.
-- `exit` codes: `post_deleted` (no `rule` key) for a position or pending buy whose trigger post was deleted; `caller_exited` and `author_exited` for a position or pending buy that this rule opened because of that same caller or author (same namespace, and same id, or same handle without case when ids are missing).
+- `exit`: code `post_deleted`, with no `rule` key, for each position whose trigger post was deleted.
 - Order within one event: all `fire`, then all `skip`, then all `exit`. Within each group, rules in config order; within a rule, signals in signal order.
 - A rule fires at most once per post (`engagement`, `new_tweet` on posts), per event (`follow`, `pfp_update`, `new_tweet` on bios), or per mint (`ca_scanner`, `callout`, `fomo`). A repeat is silent. A skip does not use up that chance.
-- `maxSnipes` (0 = no limit) and `cooldownSec` count fires per rule. A fire that sends nothing is given back: the snipe and the fire-once key are released, exactly once (see Trade state).
+- `maxSnipes` (0 = no limit) counts a rule's buys (see Trade state) and `cooldownSec` spaces out its fires. A fire that sends nothing is given back: its snipe and its fire-once key are released.
 - A repeated event produces nothing, whichever connection it came on: `tweet/update` and `tweet/meta` repeat by envelope `id` (never deduplicated without one); events with `d.eventId` repeat by that id; every other event repeats by its `event` key, and an event whose key is empty is never deduplicated.
 
 ## Trade state
 
-Every buy and sell is a trade, recorded in `state/live.json` (or `state/dry-run.json` in dry run; the two never mix). The file follows `ledger.schema.json`, version 1. A bot validates it on load and refuses to start when it is unreadable, invalid, or of the other mode; only a missing file is created. Each write goes to a temp file, is flushed with fsync, renamed over the old file, and the directory is fsynced.
+The bot keeps one JSON file per mode: `state/live.json`, or `state/dry-run.json` in dry run. The file follows `ledger.schema.json`, version 2. It holds:
 
-```mermaid
-stateDiagram-v2
-  [*] --> reserved: reserve (limits checked)
-  reserved --> failed: nothing sent (filters, build, or the write before sending failed)
-  reserved --> sending: written to disk, then sent
-  sending --> confirmed: landed
-  sending --> failed: landed with an error, or Jupiter rejected it
-  sending --> unknown: no answer
-  sending --> reconciled: expired (found after a restart)
-  unknown --> reconciled: landed, failed, or expired
-  reserved --> confirmed: dry run only
-```
+- `purchases`: every mint bought, with its rule
+- `spend`: the total and the last hour
+- `positions`: tokens held
+- `pending`: trades written before sending whose outcome is not known yet
 
-Reserving a buy checks, in this order: no other buy of the mint is in `reserved`, `sending`, or `unknown`; with `skipIfAlreadyBought`, the mint is not in `purchases`; with `skipIfAlreadyHolding`, there is no open position in it; and the largest possible debit fits the spend caps (per trade, per rolling hour, total). The largest possible debit is the amount plus the signature fee (5,000 lamports), the priority fee, every tip the transaction will carry, rent for a Token-2022 token account (2,074,080 lamports), and rent for pump.fun's volume accumulator (1,844,400 lamports). The part above the amount is `feeBudgetLamports`.
+Loading:
 
-Reserving a sell fails when there is no position, or when the position's `sellTradeId` points to a sell still in `reserved`, `sending`, or `unknown`: one sell at a time.
+- Only one process may use a file. Before loading, a bot creates `state/live.lock` (or `state/dry-run.lock`) with exclusive create, holding `{"pid": <pid>, "startedAt": <ms>}`. A lock whose pid is alive refuses the start. A dead pid or an unreadable lock is removed and created again once. The lock is deleted on exit.
+- A missing file is created empty. A version 1 file stops startup with a message to move or delete it; there is no migration. So does a file that fails the schema or belongs to the other mode.
+- Each write goes to a temp file, is flushed with fsync, renamed over the old file, and the directory is fsynced.
 
-Transitions:
+Buying:
 
-- `reserved -> sending`: the signature, `lastValidBlockHeight`, signed bytes (`tx`), route, and sender names are written to disk before anything goes on the wire. If that write fails, nothing is sent and the trade fails.
-- `-> failed` before sending: a buy's whole reservation is refunded; a sell clears `sellTradeId`.
-- `-> confirmed` (or `reconciled` with `landed: true`): a buy settles spend to the actual debit when known (from the transaction's balance change), records the mint in `purchases`, and opens a position; exit intents recorded on it run now. A sell closes the position. `purchases` keeps the mint after the position is sold, so "already bought" covers exited mints.
-- `-> failed` after sending (landed with an error): a buy settles spend to the actual debit, or to `feeBudgetLamports` when unknown, and is not a purchase. A sell clears `sellTradeId`.
-- Jupiter `/execute` answers: code 0 is landed (its `signature` replaces ours); -1, -2, -3, -1002, -1003, -1004, -2002, -2003, -2004 are a rejection (failed, nothing debited); any other code, a timeout, or an unreadable answer is unknown.
-- `-> unknown`: nothing is refunded or released, and the buy's mint goes into `purchases` (it may have landed).
-- `-> reconciled`: at startup and every 2 seconds the reconciler checks each `sending` or `unknown` trade's signature (`getSignatureStatuses` with history). Confirmed without error: landed, and the position opens with an unknown token amount. Confirmed with an error: failed. Not found and the current block height is above `lastValidBlockHeight`: expired, which refunds a buy's reservation and removes it from `purchases`. Otherwise the stored `tx` is sent again to the same senders.
-- At startup, a trade still `reserved` was never sent (because `sending` is written first) and fails with its reservation refunded.
+- One buy per mint, ever. A buy is refused when the mint is in `purchases`, has a pending trade, or has a buy in progress in this process.
+- `maxSnipes` counts a rule's `purchases`, its pending buys, and its buys in progress.
+- Before the transaction is sent, the bot writes its pending entry and adds the spend reservation (see Money bound) in one write. That write first checks the spend caps: per trade, per rolling hour, total. If the caps refuse or the write fails, nothing is sent.
+- The pending entry carries `signature`, `blockhash`, `lastValidBlockHeight` (`null` when unknown), and `amountLamports`, the amount spent on the token, which becomes the position's cost.
+- Jupiter: the pending entry carries the signed transaction's first signature, or `null` when it has none of ours yet. When `/execute` returns a signature, that one is stored.
 
-Positions keep the trade's `trigger` (rule, fire key, event, post key, and the acting account), which is how delete, caller, and author exits find them. An exit for a mint whose buy is still pending is stored in that buy's `exitIntents` and applied when it lands; it is dropped if the buy never lands. A position's `tokenAmount` stays `null` until a balance read returns more than 0; a sell does not go out while the balance is unknown or 0.
+Outcomes, each in one write:
 
-Snipes and fires: the rule engine reserves a snipe when a rule fires. A fire is given back (snipe count minus one, fire-once key forgotten) exactly once, and only when no transaction of that fire was sent: the buy was refused or filtered, the build or the pre-send write failed, or a sell rule found no position. A dry-run trade counts as sent, so limits behave as they would live. A graduation retry (a pump.fun buy that failed on chain because the curve completed, retried once through Jupiter) is a new trade within the same fire and reserves no new snipe.
+| Outcome | Buy | Sell |
+| --- | --- | --- |
+| Confirmed without error | Pending removed. The mint goes into `purchases` and the position opens. Spend settles to the actual debit when it is known. | Pending removed, position removed. |
+| Confirmed with an error | Pending removed. Not a purchase. Spend keeps the actual debit, or the whole reservation when unknown. | Pending removed. The position and its `pendingExits` stay. |
+| Expired | Pending removed and the reservation refunded. | Pending removed. |
+| Jupiter rejection | Same as expired. | Same as expired. |
+| Unknown | Stays pending. Nothing is refunded. | Stays pending. |
 
-Where a transaction goes: with `antiMev`, only to Jito, and only when it carries the Jito tip; otherwise to every RPC, plus each extra sender that needs a tip only when the transaction carries that sender's tip. Jupiter trades go to Jupiter `/execute` alone.
+The Jupiter `/execute` code maps through `jupiterExecuteCodes` in `trading.json`. Any other code, a timeout, or an unreadable answer leaves the trade pending.
+
+Reconciler, at startup and every 2 seconds (a run that starts while another runs returns at once):
+
+- For each pending trade this process is not sending, ask `getSignatureStatuses` (with `searchTransactionHistory: true`). A confirmed signature resolves it.
+- A trade expires only when the signature is not found and `isBlockhashValid` for its `blockhash` (at `processed`) returns `false`. A failed call keeps it pending.
+- A pending trade with `signature: null` waits for manual review; the bot logs it once.
+- A position with `tokenAmount: null` gets a balance read; the amount is stored once it is above 0.
+- A position with `pendingExits`, a known balance, and no pending sell is sold.
+
+Exits:
+
+- An exit for a held mint is added to the position's `pendingExits`. It stays there until a sell confirms. One sell at a time per position.
+- Exits come from a delete of the trigger post (`post_deleted`), take profit, stop loss, and max hold time.
+- Exit pricing: a pump.fun position on a live curve is priced from the curve after fees; any other from a Jupiter quote to SOL. With no price, take profit and stop loss wait for the next check; the time limit still applies.
+
+Routes:
+
+- A pump.fun coin still on its bonding curve and quoted in SOL is bought with a locally built pump.fun transaction. A curve quoted in another token is skipped with `unsupported_curve`. Every other coin goes through Jupiter.
+- A failed buy is final; the bot does not retry it another way.
+- Local transactions go to every `SOLANA_RPC_URLS` entry, or with `antiMev` only to Jito, carrying the Jito tip. Jupiter trades go to Jupiter `/execute` alone.
+
+Caches: a blockhash older than 10 s is never used. The epoch reading expires after 60 s; without a fresh epoch, the higher of a Token-2022 mint's two transfer fees applies. pump.fun fee tiers older than 5 minutes are replaced by the single tier with the highest fee.
+
+Ledger fixtures (`fixtures/ledger/*.json`): load each file in the mode inside it, write it back, and the written file must equal the original as a JSON value.
+
+## Money bound
+
+A buy reserves its largest possible wallet debit against the spend caps. A locally built pump.fun buy reserves the amount, the 5,000-lamport signature fee, the priority fee (`computeUnitLimit` times the unit price, rounded up), the Jito tip, rent for the token account (2,074,080 lamports), rent for pump.fun's volume accumulator (1,844,400 lamports), and the curve's rent top-up ((115 minus the curve account's length) times 6,960 lamports, when positive).
+
+Jupiter offers no fee ceiling on `/order`, so a Jupiter buy reserves the amount, the signature fee, token account rent, and `execution.maxAutoPriorityFeeSol`. The bot simulates the signed transaction once, takes the wallet's balance drop plus the fees the message declares (5,000 lamports per signature, and the compute unit price times the compute unit limit, or 200,000 units per instruction when no limit is set), and refuses to send when that is above the reservation.
 
 ## Event fixtures
 
@@ -172,7 +199,7 @@ Where a transaction goes: with `antiMev`, only to Jito, and only when it carries
   "name": "engagement",
   "description": "What the case covers.",
   "config": { "rules": [ ... ] },
-  "positions": [ { "mint": "...", "postKey": "twitter:123", "rule": "rule-name", "actor": { "namespace": "pump_fun", "handle": "CallerOne" } } ],
+  "positions": [ { "mint": "...", "postKey": "twitter:123", "rule": "rule-name" } ],
   "events": [ { "connection": "standard", "receivedAtMs": 1772000001100, "envelope": { "v": 1, "t": "tweet", "op": "content", "ts": 1772000001100, "d": { ... } } } ],
   "expectedSignals": [ ... ],
   "expectedDecisions": [ ... ]
@@ -180,7 +207,7 @@ Where a transaction goes: with `antiMev`, only to Jito, and only when it carries
 ```
 
 - `config` is a config file as a user would write it; apply defaults before use. When absent, use any valid config with no rule that matches the events.
-- `positions` are open positions held before the first event, each with the trigger it was bought on (`postKey` optional). They only matter for exits.
+- `positions` are open positions held before the first event, each with the rule and post it was bought on (`postKey` optional). They only matter for delete exits.
 - `events` are fed in order to one fresh decision pipeline. `receivedAtMs` is the receipt time used for post age and cooldowns.
 - `expectedSignals` and `expectedDecisions` are each optional. When present, the concatenation of every event's output, in event order, must equal the list exactly.
 - Every expected value was written by hand from the protocol and the rules above, never produced by either implementation. To add a case, write a new file with one behavior per event, derive the output by hand, and run both test suites.

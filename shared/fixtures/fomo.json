@@ -1,6 +1,6 @@
 {
   "name": "fomo",
-  "description": "FOMO: theses by a watched author or on a watched coin fire, exclude keywords skip, a watched coin's first verification fires once, a closing thesis sells and never buys.",
+  "description": "FOMO: theses by a watched author or on a watched coin fire, exclude keywords skip, a watched coin's first verification fires once, a closing thesis never buys.",
   "config": {
     "rules": [
       {
@@ -22,7 +22,6 @@
           ],
           "scanDepth": 0
         },
-        "sellWhenAuthorExits": true,
         "filters": {
           "maxSnipes": 0
         }
@@ -39,17 +38,6 @@
       }
     ]
   },
-  "positions": [
-    {
-      "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
-      "rule": "fomo",
-      "actor": {
-        "namespace": "fomo",
-        "id": "u1",
-        "handle": "alpha"
-      }
-    }
-  ],
   "events": [
     {
       "connection": "standard",
@@ -360,7 +348,6 @@
       "rule": "fomo",
       "decision": "fire",
       "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
-      "action": "buy",
       "source": "fomo"
     },
     {
@@ -368,7 +355,6 @@
       "rule": "fomo",
       "decision": "fire",
       "mint": "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3",
-      "action": "buy",
       "source": "fomo"
     },
     {
@@ -382,15 +368,7 @@
       "rule": "verified",
       "decision": "fire",
       "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
-      "action": "buy",
       "source": "fomo"
-    },
-    {
-      "event": "account/thesis th-5",
-      "rule": "fomo",
-      "decision": "exit",
-      "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
-      "code": "author_exited"
     }
   ]
 }

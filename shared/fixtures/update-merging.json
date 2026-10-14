@@ -195,7 +195,6 @@
       "rule": "scan",
       "decision": "fire",
       "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
-      "action": "buy",
       "source": "text"
     },
     {
@@ -203,7 +202,6 @@
       "rule": "scan",
       "decision": "fire",
       "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
-      "action": "buy",
       "source": "reference"
     },
     {
@@ -211,7 +209,6 @@
       "rule": "scan",
       "decision": "fire",
       "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
-      "action": "buy",
       "source": "text"
     }
   ]

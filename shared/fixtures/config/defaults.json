@@ -27,7 +27,6 @@
       ],
       "rules.0.token": {
         "mint": "",
-        "action": "buy",
         "amountSol": 0.01
       },
       "rules.0.filters.maxSnipes": 1,
@@ -37,8 +36,7 @@
         "slippagePct": 20,
         "priorityFeeSol": "auto",
         "tipSol": "auto",
-        "antiMev": true,
-        "retriesOnGraduation": 1
+        "antiMev": true
       },
       "rules.0.includeKeywords": {
         "words": [],
@@ -52,9 +50,7 @@
         "maxPerHourSol": 0.5,
         "maxTotalSol": 1
       },
-      "execution.pumpBuilder": "local",
       "execution.blockhashRefreshMs": 400,
-      "senders": [],
       "rules.0.filters.maxMarketCapUsd": null,
       "rules.0.filters.minTokenAgeSec": null,
       "safety.maxRugcheckScore": null

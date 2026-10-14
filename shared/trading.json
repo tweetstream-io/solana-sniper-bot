@@ -1,0 +1,17 @@
+{
+  "description": "Values both bots load. jitoTipAccounts: from getTipAccounts in https://docs.jito.wtf/lowlatencytxnsend/ (Jito says they do not change). jupiterExecuteCodes: how a Jupiter /execute code ends a trade (https://developers.jup.ag/docs/swap/order-and-execute); any other code, a timeout, or an unreadable answer leaves it pending.",
+  "jitoTipAccounts": [
+    "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
+    "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
+    "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY",
+    "ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49",
+    "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh",
+    "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt",
+    "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL",
+    "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT"
+  ],
+  "jupiterExecuteCodes": {
+    "landed": [0],
+    "rejected": [-1, -2, -3, -1002, -1003, -1004, -2002, -2003, -2004]
+  }
+}

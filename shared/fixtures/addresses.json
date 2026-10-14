@@ -1,6 +1,6 @@
 {
   "name": "addresses",
-  "description": "Contract address extraction: 32-byte base58 decode, punctuation, denylist, glued text, EVM, token links, one signal per mint per event.",
+  "description": "Contract address extraction: 32-byte base58 decode, punctuation, denylist, glued text (a digit or letter on either side, including characters outside the base58 alphabet such as 0, O, I), EVM, token links, one signal per mint per event.",
   "config": {
     "rules": [
       {
@@ -144,6 +144,46 @@
           }
         }
       }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000007100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000007100,
+        "d": {
+          "tweetId": "2026541027816374272",
+          "text": "glued: 05kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3 5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK30 I5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3 5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3O",
+          "createdAt": 1772000007000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000008100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000008100,
+        "d": {
+          "tweetId": "2026541032010678272",
+          "text": "punctuated: (5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3), \"AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19\"!",
+          "createdAt": 1772000008000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
     }
   ],
   "expectedSignals": [
@@ -224,6 +264,30 @@
       "source": "url",
       "chain": "solana",
       "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/content twitter:2026541032010678272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/content twitter:2026541032010678272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
       "confidence": "high",
       "actor": {
         "namespace": "x",

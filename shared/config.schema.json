@@ -169,15 +169,6 @@
       "additionalProperties": false,
       "description": "How transactions are built and sent.",
       "properties": {
-        "pumpBuilder": {
-          "enum": [
-            "local",
-            "pumpportal"
-          ],
-          "default": "local",
-          "description": "local builds pump.fun buys in process. pumpportal asks the PumpPortal API to build them.",
-          "$comment": "local saves one HTTPS round trip per buy."
-        },
         "computeUnitLimit": {
           "type": "integer",
           "default": 120000,
@@ -207,7 +198,7 @@
         "rebroadcastMs": {
           "type": "integer",
           "default": 1500,
-          "description": "How often an unconfirmed transaction is sent again to every sender.",
+          "description": "How often an unconfirmed transaction is sent again.",
           "minimum": 100
         },
         "confirmTimeoutMs": {
@@ -215,46 +206,6 @@
           "default": 60000,
           "description": "Give up waiting for confirmation after this long and mark the outcome unknown.",
           "minimum": 1000
-        }
-      }
-    },
-    "senders": {
-      "type": "array",
-      "default": [],
-      "description": "Extra JSON-RPC sendTransaction endpoints, such as a staked low-latency sender. The same signed transaction goes to every sender.",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "name",
-          "urlEnv"
-        ],
-        "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Name used in logs and the latency report."
-          },
-          "urlEnv": {
-            "type": "string",
-            "pattern": "^[A-Z][A-Z0-9_]*$",
-            "description": "Name of the environment variable that holds the URL, so API keys stay in .env."
-          },
-          "tipAccounts": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "pattern": "^[1-9A-HJ-NP-Za-km-z]{32,44}$"
-            },
-            "default": [],
-            "description": "If the sender requires a tip, its tip accounts. One is picked at random per transaction."
-          },
-          "tipSol": {
-            "type": "number",
-            "minimum": 0,
-            "default": 0,
-            "description": "Tip for this sender, in SOL. Paid whichever sender lands the transaction."
-          }
         }
       }
     }
@@ -514,11 +465,6 @@
           "default": false,
           "description": "callout: fire only when the event reports that the caller holds the token (position.amountHeld above 0)."
         },
-        "sellWhenCallerExits": {
-          "type": "boolean",
-          "default": false,
-          "description": "callout: sell what this rule bought because of a caller when a callout or callout_update from that caller reports position.amountHeld of 0."
-        },
         "fomoUsers": {
           "type": "array",
           "items": {
@@ -551,11 +497,6 @@
           "minItems": 1,
           "description": "fomo: fire on theses, on first observed token verification of a watched coin, or both."
         },
-        "sellWhenAuthorExits": {
-          "type": "boolean",
-          "default": false,
-          "description": "fomo: sell what this rule bought because of an author when that author's thesis on the coin reports position.closedAt."
-        },
         "useDetectedCa": {
           "type": "boolean",
           "default": false,
@@ -571,18 +512,10 @@
               "default": "",
               "description": "The token to trade. ca_scanner, callout and fomo: leave empty to trade the address in the event, or set it to act only on that token. Other modes: required unless useDetectedCa is true."
             },
-            "action": {
-              "enum": [
-                "buy",
-                "sell"
-              ],
-              "default": "buy",
-              "description": "buy spends amountSol. sell sells the whole position in this token."
-            },
             "amountSol": {
               "type": "number",
               "default": 0.01,
-              "description": "SOL to spend per buy.",
+              "description": "SOL to spend on the buy.",
               "minimum": 0,
               "$comment": "Also capped by spend.maxPerTradeSol."
             }
@@ -596,7 +529,7 @@
             "maxSnipes": {
               "type": "integer",
               "default": 1,
-              "description": "How many times this rule may trade. 0 means no limit.",
+              "description": "How many tokens this rule may buy, counted from the buys in the state file. 0 means no limit.",
               "minimum": 0,
               "$comment": "Safety: caps losses from a rule that fires on a compromised account."
             },
@@ -683,17 +616,6 @@
               "description": "Skip tokens that the safety check service flags as dangerous.",
               "$comment": "Needs safety.rugcheck turned on."
             },
-            "skipIfAlreadyBought": {
-              "type": "boolean",
-              "default": true,
-              "description": "Skip a mint this bot already bought, even after a restart.",
-              "$comment": "Safety: stops repeat buys from repeated posts."
-            },
-            "skipIfAlreadyHolding": {
-              "type": "boolean",
-              "default": true,
-              "description": "Skip a mint the bot still holds."
-            },
             "onMissingData": {
               "enum": [
                 "reject",
@@ -748,15 +670,8 @@
             "antiMev": {
               "type": "boolean",
               "default": true,
-              "description": "Send only through the Jito block engine, with a tip, which protects the transaction from sandwiching. Off: send to every RPC and extra sender instead.",
+              "description": "Send only through the Jito block engine, with a tip, which protects the transaction from sandwiching. Off: send to the RPC URLs instead.",
               "$comment": "Jupiter trades are landed by Jupiter and ignore this."
-            },
-            "retriesOnGraduation": {
-              "type": "integer",
-              "default": 1,
-              "description": "If a pump.fun coin finishes its bonding curve while you buy, retry this many times through Jupiter.",
-              "minimum": 0,
-              "$comment": "Retries only after a definite failure, never after an unknown outcome."
             }
           }
         }
@@ -946,13 +861,6 @@
             "properties": {
               "enabled": {
                 "const": true
-              },
-              "token": {
-                "properties": {
-                  "action": {
-                    "const": "buy"
-                  }
-                }
               }
             }
           },

@@ -22,7 +22,6 @@
     "values": {
       "rules.0.filters.maxSnipes": 0,
       "rules.0.filters.cooldownSec": 0,
-      "rules.0.filters.skipIfAlreadyBought": true,
       "safety.budgetMs": 80,
       "safety.rugcheck": "off"
     }

@@ -104,7 +104,6 @@
       "rule": "pins",
       "decision": "fire",
       "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
-      "action": "buy",
       "source": "pin"
     },
     {
@@ -112,7 +111,6 @@
       "rule": "pins",
       "decision": "fire",
       "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
-      "action": "buy",
       "source": "pin"
     }
   ]

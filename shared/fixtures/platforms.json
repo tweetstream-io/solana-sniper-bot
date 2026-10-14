@@ -1,6 +1,6 @@
 {
   "name": "platforms",
-  "description": "Authors are qualified by platform: a Truth Social account with the same id or handle as a watched X account does not fire X rules.",
+  "description": "Accounts are qualified by their effective platform: the author's platform, else the event's platform, else twitter; a referenced author or follow target falls back to the outer account's platform. Rules match only X accounts, so Truth Social accounts with a watched id or handle never fire them.",
   "config": {
     "rules": [
       {
@@ -19,6 +19,63 @@
         "accounts": [
           "@dev_one"
         ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      },
+      {
+        "name": "engage-id",
+        "mode": "engagement",
+        "reactor": "111",
+        "reactedTo": [
+          "999"
+        ],
+        "token": {
+          "mint": "5kLwbMiKFQRsH8Tmz1a1PnEDuSniP6dtmKMvNQwZdBK3"
+        },
+        "filters": {
+          "maxSnipes": 0
+        }
+      },
+      {
+        "name": "engage-handle",
+        "mode": "engagement",
+        "reactor": "111",
+        "reactedTo": [
+          "@someone"
+        ],
+        "token": {
+          "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk"
+        },
+        "filters": {
+          "maxSnipes": 0
+        }
+      },
+      {
+        "name": "follow-any",
+        "mode": "follow",
+        "accounts": [
+          "111"
+        ],
+        "token": {
+          "mint": "jqwr76eubixztvn3ka2NW4Ewxb5JZs8skn1ju1oa4Qm"
+        },
+        "filters": {
+          "maxSnipes": 0
+        }
+      },
+      {
+        "name": "follow-target",
+        "mode": "follow",
+        "accounts": [
+          "111"
+        ],
+        "targets": [
+          "999"
+        ],
+        "token": {
+          "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19"
+        },
         "filters": {
           "maxSnipes": 0
         }
@@ -66,6 +123,126 @@
           }
         }
       }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000004100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "update",
+        "ts": 1772000004100,
+        "d": {
+          "tweetId": "tu-1",
+          "platform": "truth_social",
+          "text": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000004500,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "pin",
+        "ts": 1772000004500,
+        "d": {
+          "action": "pin",
+          "tweetId": "tp-2",
+          "platform": "truth_social",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "eventId": "pin-t",
+          "observedAt": 1772000004500,
+          "text": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo"
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000003100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000003100,
+        "d": {
+          "tweetId": "2026541011039158272",
+          "text": "look",
+          "createdAt": 1772000003000,
+          "kind": "quote",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "ref": {
+            "type": "quote",
+            "tweetId": "ts-9",
+            "author": {
+              "id": "999",
+              "handle": "@someone",
+              "platform": "truth_social"
+            },
+            "text": "hi"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000005000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "follow",
+        "ts": 1772000005000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one",
+            "platform": "truth_social"
+          },
+          "target": {
+            "handle": "@x"
+          },
+          "eventId": "f-t",
+          "kind": "FOLLOW",
+          "observedAt": 1772000005000
+        },
+        "id": "f-t"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000005000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "follow",
+        "ts": 1772000005000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "target": {
+            "id": "999",
+            "handle": "@special",
+            "platform": "truth_social"
+          },
+          "eventId": "f-x",
+          "kind": "FOLLOW",
+          "observedAt": 1772000005000
+        },
+        "id": "f-x"
+      }
     }
   ],
   "expectedSignals": [
@@ -92,6 +269,30 @@
         "id": "111",
         "handle": "dev_one"
       }
+    },
+    {
+      "event": "tweet/update truth_social:tu-1",
+      "source": "text",
+      "chain": "solana",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "confidence": "high",
+      "actor": {
+        "namespace": "truth_social",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/pin truth_social:tp-2",
+      "source": "pin",
+      "chain": "solana",
+      "mint": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
+      "confidence": "high",
+      "actor": {
+        "namespace": "truth_social",
+        "id": "111",
+        "handle": "dev_one"
+      }
     }
   ],
   "expectedDecisions": [
@@ -100,7 +301,6 @@
       "rule": "by-id",
       "decision": "fire",
       "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
-      "action": "buy",
       "source": "text"
     },
     {
@@ -108,8 +308,14 @@
       "rule": "by-handle",
       "decision": "fire",
       "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
-      "action": "buy",
       "source": "text"
+    },
+    {
+      "event": "account/follow f-x",
+      "rule": "follow-any",
+      "decision": "fire",
+      "mint": "jqwr76eubixztvn3ka2NW4Ewxb5JZs8skn1ju1oa4Qm",
+      "source": null
     }
   ]
 }

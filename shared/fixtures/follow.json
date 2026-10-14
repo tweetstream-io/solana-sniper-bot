@@ -1,6 +1,6 @@
 {
   "name": "follow",
-  "description": "Follow and unfollow: CA from the followed account's bio, a payload without a bio, a target filter, an unfollow that sells, and a duplicate event.",
+  "description": "Follow and unfollow: CA from the followed account's bio, a payload without a bio, a target filter, an unfollow rule, and a duplicate event.",
   "config": {
     "rules": [
       {
@@ -12,7 +12,7 @@
         "useDetectedCa": true
       },
       {
-        "name": "unfollow-sell",
+        "name": "unfollow",
         "mode": "follow",
         "accounts": [
           "111"
@@ -21,8 +21,7 @@
           "unfollow"
         ],
         "token": {
-          "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
-          "action": "sell"
+          "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19"
         }
       },
       {
@@ -160,7 +159,6 @@
       "rule": "bio-ca",
       "decision": "fire",
       "mint": "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd",
-      "action": "buy",
       "source": "follow_bio"
     },
     {
@@ -168,7 +166,6 @@
       "rule": "targeted",
       "decision": "fire",
       "mint": "jqwr76eubixztvn3ka2NW4Ewxb5JZs8skn1ju1oa4Qm",
-      "action": "buy",
       "source": null
     },
     {
@@ -179,10 +176,9 @@
     },
     {
       "event": "account/unfollow f-3",
-      "rule": "unfollow-sell",
+      "rule": "unfollow",
       "decision": "fire",
       "mint": "AwCd8xw8H35Df9qJpKLuQjZGoi6kthFq8hxQDioyro19",
-      "action": "sell",
       "source": null
     }
   ]

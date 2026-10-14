@@ -1,0 +1,34 @@
+{
+  "version": 2,
+  "mode": "live",
+  "purchases": {},
+  "spend": {
+    "totalLamports": "12000000",
+    "recent": [
+      {
+        "tradeId": "m6x3-0",
+        "at": 1772000000000,
+        "lamports": "12000000"
+      }
+    ]
+  },
+  "positions": {},
+  "pending": {
+    "m6x3-0": {
+      "side": "buy",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "route": "jupiter",
+      "signature": null,
+      "blockhash": "US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx",
+      "lastValidBlockHeight": null,
+      "reservedLamports": "12000000",
+      "amountLamports": "10000000",
+      "rule": "fomo",
+      "trigger": {
+        "eventRef": "account/thesis th-1"
+      },
+      "tokenProgram": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+      "sentAt": 1772000000000
+    }
+  }
+}

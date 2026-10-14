@@ -192,7 +192,6 @@
       "rule": "moon",
       "decision": "fire",
       "mint": "GQeXtxWoxbo1C8f4sUU14WMPbRNkgFgnCKvmfooptudo",
-      "action": "buy",
       "source": null
     },
     {
@@ -200,7 +199,6 @@
       "rule": "detected",
       "decision": "fire",
       "mint": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2",
-      "action": "buy",
       "source": "reference"
     },
     {
@@ -214,7 +212,6 @@
       "rule": "bio",
       "decision": "fire",
       "mint": "3BUBwYaJnsRvB7dHwYMqUfvNAQ9krmwBoHnwQJik9zLd",
-      "action": "buy",
       "source": null
     }
   ]
