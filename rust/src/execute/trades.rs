@@ -379,6 +379,8 @@ struct Book {
     tickets: HashMap<String, Ticket>,
     /// Pending trades whose write has not completed; the reconciler does not see them yet.
     unpersisted: HashSet<String>,
+    /// Fires the rule engine admitted whose buy is not reserved yet, as (rule, mint).
+    claims: Vec<(String, String)>,
     next_id: u64,
     generation: u64,
 }
@@ -560,7 +562,7 @@ impl TradeBook {
     }
 
     fn with(state: State, path: Option<&Path>, lock: Option<LockFile>) -> TradeBook {
-        let book = Book { state, tickets: HashMap::new(), unpersisted: HashSet::new(), next_id: 0, generation: 0 };
+        let book = Book { state, tickets: HashMap::new(), unpersisted: HashSet::new(), claims: Vec::new(), next_id: 0, generation: 0 };
         let file = path.map(|p| StateFile { path: p.to_path_buf(), written: Mutex::new(0) });
         TradeBook { book: Mutex::new(book), file, lock: Mutex::new(lock) }
     }
@@ -573,11 +575,27 @@ impl TradeBook {
 
     /// Returns how many mints a rule bought, is sending, or is buying, for `maxSnipes`.
     pub fn buys_by_rule(&self, rule: &str) -> u64 {
-        let book = self.lock();
-        let bought = book.state.purchases.values().filter(|p| p.rule == rule).count();
-        let pending = book.state.pending.values().filter(|p| p.side == Side::Buy && p.rule == rule).count();
-        let tickets = book.tickets.values().filter(|t| t.side == Side::Buy && t.rule == rule).count();
-        (bought + pending + tickets) as u64
+        buys_by_rule(&self.lock(), rule)
+    }
+
+    /// Claims one of a rule's `maxSnipes` (0 means no limit) for a fire on `mint`, counting the
+    /// rule's purchases, pending buys, buys in progress, and earlier claims. Reserving the buy
+    /// turns the claim into a buy in progress; [`TradeBook::release_snipe`] gives it back.
+    /// Returns false when the rule has none left.
+    pub fn claim_snipe(&self, rule: &str, mint: &str, max_snipes: u64) -> bool {
+        let mut book = self.lock();
+        let claimed = book.claims.iter().filter(|(r, _)| r == rule).count() as u64;
+        if max_snipes > 0 && buys_by_rule(&book, rule) + claimed >= max_snipes {
+            return false;
+        }
+        book.claims.push((rule.to_string(), mint.to_string()));
+        true
+    }
+
+    /// Gives back a claim whose buy was never reserved. A claim already turned into a buy is not
+    /// held any more, so this changes nothing for it.
+    pub fn release_snipe(&self, rule: &str, mint: &str) {
+        take_claim(&mut self.lock(), rule, mint);
     }
 
     /// Reserves a buy in memory: one buy per mint per state file, so it is refused while the mint
@@ -589,6 +607,7 @@ impl TradeBook {
     pub fn reserve_buy(&self, request: BuyRequest) -> Result<Ticket, ReserveError> {
         let BuyRequest { mint, rule, trigger, now } = request;
         let mut book = self.lock();
+        take_claim(&mut book, rule, mint);
         if book.state.purchases.contains_key(mint) || book.state.positions.contains_key(mint) {
             return Err(ReserveError::AlreadyBought);
         }
@@ -841,6 +860,19 @@ impl TradeBook {
             log("state", &format!("state write failed, the next change retries it: {error}"));
         }
     }
+}
+
+fn take_claim(book: &mut Book, rule: &str, mint: &str) {
+    if let Some(at) = book.claims.iter().position(|(r, m)| r == rule && m == mint) {
+        book.claims.swap_remove(at);
+    }
+}
+
+fn buys_by_rule(book: &Book, rule: &str) -> u64 {
+    let bought = book.state.purchases.values().filter(|p| p.rule == rule).count();
+    let pending = book.state.pending.values().filter(|p| p.side == Side::Buy && p.rule == rule).count();
+    let tickets = book.tickets.values().filter(|t| t.side == Side::Buy && t.rule == rule).count();
+    (bought + pending + tickets) as u64
 }
 
 fn new_ticket(book: &mut Book, side: Side, mint: &str, rule: &str, trigger: Trigger, now: i64) -> Ticket {

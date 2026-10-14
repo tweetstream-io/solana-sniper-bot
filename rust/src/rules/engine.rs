@@ -1,6 +1,6 @@
 //! Matches one activity against the rules that listen to its account, then applies the limits that
-//! need memory: fire once per post or event, cooldown, and max snipes (counted from the buys in the
-//! trade state, plus this run's fires). Synchronous: nothing else runs between "this rule fires"
+//! need memory: fire once per post or event, cooldown, and max snipes (counted by the trade book from
+//! its buys and the fires not reserved yet). Synchronous: nothing else runs between "this rule fires"
 //! and "the slot is taken". Next: `execute/trade.rs` runs each fire.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -35,25 +35,22 @@ pub struct Evaluation {
 
 const MAX_FIRED_KEYS: usize = 100_000;
 
-/// The rule index, fire-once keys, snipes used, and per-rule cooldown clocks.
+/// The rule index, fire-once keys, and per-rule cooldown clocks.
 pub struct RuleEngine {
     config: Arc<Config>,
     index: RuleIndex,
+    book: Arc<TradeBook>,
     fired: HashSet<String>,
     fired_order: VecDeque<String>,
-    snipes: HashMap<usize, u64>,
     last_fire: HashMap<usize, i64>,
 }
 
 impl RuleEngine {
     /// Builds the engine and its rule index.
-    pub fn new(config: Arc<Config>, book: &TradeBook) -> RuleEngine {
+    pub fn new(config: Arc<Config>, book: &Arc<TradeBook>) -> RuleEngine {
         let index = RuleIndex::new(&config.rules);
-        let mut snipes = HashMap::new();
-        for (i, rule) in config.rules.iter().enumerate() {
-            snipes.insert(i, book.buys_by_rule(&rule.name));
-        }
-        RuleEngine { config, index, fired: HashSet::new(), fired_order: VecDeque::new(), snipes, last_fire: HashMap::new() }
+        let book = Arc::clone(book);
+        RuleEngine { config, index, book, fired: HashSet::new(), fired_order: VecDeque::new(), last_fire: HashMap::new() }
     }
 
     /// Returns what every rule watching the activity's actor makes of it.
@@ -88,10 +85,8 @@ impl RuleEngine {
     /// with nothing to sell): the rule may fire again on the same key and gets its snipe back.
     /// Call at most once per fire.
     pub fn release(&mut self, fire: &Fire) {
-        if self.fired.remove(&fire.fire_key)
-            && let Some(used) = self.snipes.get_mut(&fire.rule)
-        {
-            *used = used.saturating_sub(1);
+        if self.fired.remove(&fire.fire_key) {
+            self.book.release_snipe(&self.config.rules[fire.rule].name, &fire.mint);
         }
     }
 
@@ -108,13 +103,11 @@ impl RuleEngine {
             out.skips.push(Skip { rule: fire.rule, code: SkipCode::Cooldown, detail: format!("{left} s left") });
             return;
         }
-        let used = self.snipes.entry(fire.rule).or_default();
-        if rule.filters.max_snipes > 0 && *used >= rule.filters.max_snipes {
+        if !self.book.claim_snipe(&rule.name, &fire.mint, rule.filters.max_snipes) {
             let detail = format!("maxSnipes {} reached", rule.filters.max_snipes);
             out.skips.push(Skip { rule: fire.rule, code: SkipCode::MaxSnipes, detail });
             return;
         }
-        *used += 1;
         self.fired.insert(fire.fire_key.clone());
         self.fired_order.push_back(fire.fire_key.clone());
         if self.fired.len() > MAX_FIRED_KEYS
