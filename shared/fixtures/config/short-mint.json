@@ -1,0 +1,24 @@
+{
+  "name": "short-mint",
+  "description": "A mint that matches the base58 pattern but decodes to 31 bytes.",
+  "config": {
+    "rules": [
+      {
+        "name": "x",
+        "mode": "new_tweet",
+        "accounts": [
+          "1"
+        ],
+        "token": {
+          "mint": "4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofL"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "error": {
+      "rule": "x",
+      "field": "token.mint"
+    }
+  }
+}

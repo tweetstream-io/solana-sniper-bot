@@ -1,0 +1,22 @@
+{
+  "name": "all-disabled",
+  "description": "Every rule disabled.",
+  "config": {
+    "rules": [
+      {
+        "name": "x",
+        "enabled": false,
+        "mode": "ca_scanner",
+        "accounts": [
+          "1"
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "error": {
+      "rule": null,
+      "field": "rules"
+    }
+  }
+}

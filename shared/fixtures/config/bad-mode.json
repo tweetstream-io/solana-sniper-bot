@@ -1,0 +1,21 @@
+{
+  "name": "bad-mode",
+  "description": "An unknown mode.",
+  "config": {
+    "rules": [
+      {
+        "name": "x",
+        "mode": "sniper",
+        "accounts": [
+          "1"
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "error": {
+      "rule": "x",
+      "field": "mode"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "placeholder",
+  "description": "An enabled rule still holding a YOUR_ placeholder.",
+  "config": {
+    "rules": [
+      {
+        "name": "x",
+        "mode": "ca_scanner",
+        "accounts": [
+          "YOUR_ACCOUNT"
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "error": {
+      "rule": "x",
+      "field": "accounts.0"
+    }
+  }
+}

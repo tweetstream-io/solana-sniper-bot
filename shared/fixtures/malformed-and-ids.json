@@ -1,0 +1,223 @@
+{
+  "name": "malformed-and-ids",
+  "description": "A payload missing required fields is skipped without stopping the stream. Events without an envelope id are deduplicated by payload ids (calloutId, kind and replyId; thesis id).",
+  "config": {
+    "rules": [
+      {
+        "name": "scan",
+        "mode": "ca_scanner",
+        "accounts": [
+          "111"
+        ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      },
+      {
+        "name": "caller",
+        "mode": "callout",
+        "callers": [
+          "CallerOne"
+        ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      },
+      {
+        "name": "fomo",
+        "mode": "fomo",
+        "fomoUsers": [
+          "alpha"
+        ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000001100,
+        "d": {
+          "text": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "createdAt": 1772000001000
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001100,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout",
+        "ts": 1772000001100,
+        "d": {
+          "platform": "pump_fun",
+          "caller": {
+            "username": "CallerOne"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000002100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000002100,
+        "d": {
+          "tweetId": "2026541006844854272",
+          "text": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+          "createdAt": 1772000002000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001100,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout",
+        "ts": 1772000001100,
+        "d": {
+          "platform": "pump_fun",
+          "caller": {
+            "username": "CallerOne"
+          },
+          "kind": "callout",
+          "token": {
+            "address": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29"
+          },
+          "calloutId": "call-x",
+          "createdAt": 1772000001000
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001100,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout",
+        "ts": 1772000001100,
+        "d": {
+          "platform": "pump_fun",
+          "caller": {
+            "username": "CallerOne"
+          },
+          "kind": "callout",
+          "token": {
+            "address": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29"
+          },
+          "calloutId": "call-x",
+          "createdAt": 1772000001000
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001100,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "thesis",
+        "ts": 1772000001100,
+        "d": {
+          "platform": "fomo",
+          "coin": {
+            "address": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+            "networkId": 1399811149
+          },
+          "author": {
+            "id": "u1",
+            "username": "alpha",
+            "verified": true
+          },
+          "thesis": {
+            "id": "th-x",
+            "text": "early",
+            "createdAt": 1772000001000,
+            "likes": 0,
+            "replies": 0
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001100,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "thesis",
+        "ts": 1772000001100,
+        "d": {
+          "platform": "fomo",
+          "coin": {
+            "address": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+            "networkId": 1399811149
+          },
+          "author": {
+            "id": "u1",
+            "username": "alpha",
+            "verified": true
+          },
+          "thesis": {
+            "id": "th-x",
+            "text": "early",
+            "createdAt": 1772000001000,
+            "likes": 0,
+            "replies": 0
+          }
+        }
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "tweet/content twitter:2026541006844854272",
+      "rule": "scan",
+      "decision": "fire",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "action": "buy",
+      "source": "text"
+    },
+    {
+      "event": "account/callout call-x:callout:",
+      "rule": "caller",
+      "decision": "fire",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "action": "buy",
+      "source": "callout"
+    },
+    {
+      "event": "account/thesis th-x",
+      "rule": "fomo",
+      "decision": "fire",
+      "mint": "7nHgAcf7tM2MuUF29mismBW2gKHBrXkGhJtU8LpqB6vN",
+      "action": "buy",
+      "source": "fomo"
+    }
+  ]
+}

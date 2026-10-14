@@ -1,6 +1,6 @@
 {
   "name": "pfp-update",
-  "description": "PFP update: avatar changes fire, other fields fire only when selected, and an unchanged value fires nothing.",
+  "description": "PFP update: avatar changes fire, other fields fire only when selected, and an unchanged value fires nothing, whether the baseline comes from the event's previous value or from an earlier event.",
   "config": {
     "rules": [
       {
@@ -132,6 +132,29 @@
           }
         },
         "id": "p-4"
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "profile_update",
+        "ts": 1772000001000,
+        "d": {
+          "actor": {
+            "id": "111",
+            "handle": "@dev_one"
+          },
+          "changes": {
+            "avatar": "https://example.com/same.png"
+          },
+          "eventId": "p-5",
+          "kind": "PROFILE",
+          "observedAt": 1772000001000
+        },
+        "id": "p-5"
       }
     }
   ],

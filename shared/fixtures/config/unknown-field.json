@@ -1,0 +1,21 @@
+{
+  "name": "unknown-field",
+  "description": "A misspelled field is reported before the errors it causes.",
+  "config": {
+    "rules": [
+      {
+        "name": "x",
+        "mode": "ca_scanner",
+        "acounts": [
+          "44196397"
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "error": {
+      "rule": "x",
+      "field": "acounts"
+    }
+  }
+}

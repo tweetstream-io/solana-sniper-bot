@@ -42,7 +42,12 @@
   "positions": [
     {
       "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
-      "rule": "fomo"
+      "rule": "fomo",
+      "actor": {
+        "namespace": "fomo",
+        "id": "u1",
+        "handle": "alpha"
+      }
     }
   ],
   "events": [

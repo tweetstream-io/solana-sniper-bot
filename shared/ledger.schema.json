@@ -1,0 +1,340 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Trade state file",
+  "description": "state/live.json and state/dry-run.json. Both bots read and write this format; see shared/README.md, section Trade state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "mode",
+    "snipes",
+    "spend",
+    "purchases",
+    "trades",
+    "positions"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "mode": {
+      "enum": [
+        "live",
+        "dry_run"
+      ]
+    },
+    "snipes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "description": "Rule name -> fires used."
+    },
+    "spend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "totalLamports",
+        "recent"
+      ],
+      "properties": {
+        "totalLamports": {
+          "type": "string",
+          "pattern": "^-?[0-9]+$",
+          "description": "Lamports as a decimal string."
+        },
+        "recent": {
+          "type": "array",
+          "description": "Spend in the last hour, one entry per buy trade.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tradeId",
+              "at",
+              "lamports"
+            ],
+            "properties": {
+              "tradeId": {
+                "type": "string"
+              },
+              "at": {
+                "type": "integer"
+              },
+              "lamports": {
+                "type": "string",
+                "pattern": "^-?[0-9]+$",
+                "description": "Lamports as a decimal string."
+              }
+            }
+          }
+        }
+      }
+    },
+    "purchases": {
+      "type": "object",
+      "description": "Mint -> first buy that confirmed or may have landed. Kept after the position is sold.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "firstAt",
+          "tradeId"
+        ],
+        "properties": {
+          "firstAt": {
+            "type": "integer"
+          },
+          "tradeId": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "trades": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/trade"
+      }
+    },
+    "positions": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/position"
+      }
+    }
+  },
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace"
+      ],
+      "properties": {
+        "namespace": {
+          "enum": [
+            "x",
+            "truth_social",
+            "binance_square",
+            "pump_fun",
+            "fomo",
+            "none"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "handle": {
+          "type": "string"
+        }
+      }
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "fireKey",
+        "eventRef",
+        "actor"
+      ],
+      "properties": {
+        "rule": {
+          "type": "string"
+        },
+        "fireKey": {
+          "type": "string"
+        },
+        "eventRef": {
+          "type": "string"
+        },
+        "postKey": {
+          "type": "string"
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        }
+      }
+    },
+    "trade": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "side",
+        "mint",
+        "route",
+        "state",
+        "createdAt",
+        "trigger",
+        "reservedLamports",
+        "feeBudgetLamports",
+        "exitIntents"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "side": {
+          "enum": [
+            "buy",
+            "sell"
+          ]
+        },
+        "mint": {
+          "type": "string"
+        },
+        "route": {
+          "enum": [
+            "pump",
+            "pumpportal",
+            "jupiter",
+            "dry_run"
+          ]
+        },
+        "state": {
+          "enum": [
+            "reserved",
+            "sending",
+            "confirmed",
+            "failed",
+            "unknown",
+            "reconciled"
+          ]
+        },
+        "createdAt": {
+          "type": "integer"
+        },
+        "trigger": {
+          "$ref": "#/$defs/trigger"
+        },
+        "reservedLamports": {
+          "type": "string",
+          "pattern": "^-?[0-9]+$",
+          "description": "Largest possible wallet debit, held against the spend caps (0 for sells)."
+        },
+        "feeBudgetLamports": {
+          "type": "string",
+          "pattern": "^-?[0-9]+$",
+          "description": "The part of reservedLamports that a transaction that lands and fails can still cost (fees, tips, rent)."
+        },
+        "spentLamports": {
+          "type": "string",
+          "pattern": "^-?[0-9]+$",
+          "description": "Actual debit, once known."
+        },
+        "signature": {
+          "type": "string"
+        },
+        "lastValidBlockHeight": {
+          "type": "integer"
+        },
+        "tx": {
+          "type": "string",
+          "description": "Signed transaction, base64, kept until the trade resolves so a restart can rebroadcast it."
+        },
+        "sentAt": {
+          "type": "integer"
+        },
+        "landed": {
+          "type": "boolean",
+          "description": "Recorded when the trade resolves: whether a transaction landed."
+        },
+        "error": {
+          "type": "string"
+        },
+        "tokenAmount": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "exitIntents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "at",
+              "detail"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "at": {
+                "type": "integer"
+              },
+              "detail": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "senders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Names of the senders the transaction went to; a rebroadcast uses the same ones."
+        }
+      }
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mint",
+        "route",
+        "tokenProgram",
+        "openedAt",
+        "buyTradeId",
+        "costLamports",
+        "tokenAmount",
+        "trigger"
+      ],
+      "properties": {
+        "mint": {
+          "type": "string"
+        },
+        "route": {
+          "enum": [
+            "pump",
+            "jupiter"
+          ]
+        },
+        "tokenProgram": {
+          "type": "string"
+        },
+        "openedAt": {
+          "type": "integer"
+        },
+        "buyTradeId": {
+          "type": "string"
+        },
+        "costLamports": {
+          "type": "string",
+          "pattern": "^-?[0-9]+$",
+          "description": "Lamports as a decimal string."
+        },
+        "tokenAmount": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9]+$",
+          "description": "Raw token units; null until a balance read succeeds."
+        },
+        "trigger": {
+          "$ref": "#/$defs/trigger"
+        },
+        "sellTradeId": {
+          "type": "string",
+          "description": "The sell in progress for this position, if any. One at a time."
+        }
+      }
+    }
+  }
+}

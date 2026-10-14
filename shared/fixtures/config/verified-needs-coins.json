@@ -1,0 +1,24 @@
+{
+  "name": "verified-needs-coins",
+  "description": "A fomo rule that fires on token_verified with no watched coins.",
+  "config": {
+    "rules": [
+      {
+        "name": "f",
+        "mode": "fomo",
+        "fomoUsers": [
+          "alpha"
+        ],
+        "fomoEvents": [
+          "token_verified"
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "error": {
+      "rule": "f",
+      "field": "fomoCoins"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 {
   "name": "limits",
-  "description": "Limits: maxSnipes stops a rule after its first trade, posts older than maxSignalAgeMs are skipped, and cooldownSec spaces out trades.",
+  "description": "Limits: maxSnipes stops a rule after its first trade, posts older than maxSignalAgeMs are skipped only by rules they concern, and cooldownSec spaces out trades.",
   "config": {
     "rules": [
       {
@@ -19,6 +19,19 @@
         "filters": {
           "maxSnipes": 0,
           "cooldownSec": 60
+        }
+      },
+      {
+        "name": "posts-only",
+        "mode": "new_tweet",
+        "accounts": [
+          "333"
+        ],
+        "events": [
+          "post"
+        ],
+        "token": {
+          "mint": "jqwr76eubixztvn3ka2NW4Ewxb5JZs8skn1ju1oa4Qm"
         }
       }
     ]
@@ -120,6 +133,35 @@
           "author": {
             "id": "222",
             "handle": "@kol_two"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000015000,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000015000,
+        "d": {
+          "tweetId": "2026541023622070272",
+          "text": "late reply",
+          "createdAt": 1772000006000,
+          "kind": "reply",
+          "author": {
+            "id": "333",
+            "handle": "@celeb"
+          },
+          "ref": {
+            "type": "reply",
+            "tweetId": "2026540998456246272",
+            "author": {
+              "id": "999",
+              "handle": "@someone"
+            },
+            "text": "hi"
           }
         }
       }

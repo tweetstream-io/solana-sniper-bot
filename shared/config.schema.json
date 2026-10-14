@@ -89,7 +89,7 @@
     "spend": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Hard caps on SOL spent, kept in state/ledger.json across restarts.",
+      "description": "Hard caps on SOL spent, kept in state/live.json (or state/dry-run.json) across restarts. Each buy reserves its largest possible cost: amount, fees, tips, and account rent.",
       "properties": {
         "maxPerTradeSol": {
           "type": "number",
@@ -304,7 +304,7 @@
         "name": {
           "type": "string",
           "minLength": 1,
-          "description": "Unique name, used in logs and in the ledger."
+          "description": "Unique name, used in logs and in the state file."
         },
         "enabled": {
           "type": "boolean",
@@ -517,7 +517,7 @@
         "sellWhenCallerExits": {
           "type": "boolean",
           "default": false,
-          "description": "callout: sell a position this rule bought when a callout or callout_update from the same caller reports position.amountHeld of 0."
+          "description": "callout: sell what this rule bought because of a caller when a callout or callout_update from that caller reports position.amountHeld of 0."
         },
         "fomoUsers": {
           "type": "array",
@@ -554,7 +554,7 @@
         "sellWhenAuthorExits": {
           "type": "boolean",
           "default": false,
-          "description": "fomo: sell a position this rule bought when a watched author's thesis on that coin reports position.closedAt."
+          "description": "fomo: sell what this rule bought because of an author when that author's thesis on the coin reports position.closedAt."
         },
         "useDetectedCa": {
           "type": "boolean",
@@ -729,7 +729,7 @@
               ],
               "default": "auto",
               "description": "Priority fee for the whole transaction in SOL, or auto for a recent-fee estimate.",
-              "$comment": "auto reads a cached estimate refreshed in the background, so it adds no latency."
+              "$comment": "auto reads a cached estimate refreshed in the background, so it adds no latency. The whole fee counts against the spend caps."
             },
             "tipSol": {
               "oneOf": [
@@ -748,7 +748,8 @@
             "antiMev": {
               "type": "boolean",
               "default": true,
-              "description": "Also send through the Jito block engine, which protects the transaction from sandwiching."
+              "description": "Send only through the Jito block engine, with a tip, which protects the transaction from sandwiching. Off: send to every RPC and extra sender instead.",
+              "$comment": "Jupiter trades are landed by Jupiter and ignore this."
             },
             "retriesOnGraduation": {
               "type": "integer",

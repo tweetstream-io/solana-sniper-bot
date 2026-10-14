@@ -1,0 +1,63 @@
+{
+  "name": "defaults",
+  "description": "A minimal rule gets every default from shared/config.schema.json, including defaults that are null.",
+  "config": {
+    "rules": [
+      {
+        "name": "r",
+        "mode": "ca_scanner",
+        "accounts": [
+          "44196397"
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "values": {
+      "rules.0.enabled": true,
+      "rules.0.minConfidence": "medium",
+      "rules.0.sources": [
+        "text",
+        "url",
+        "meta",
+        "ocr",
+        "reference",
+        "pin",
+        "profile"
+      ],
+      "rules.0.token": {
+        "mint": "",
+        "action": "buy",
+        "amountSol": 0.01
+      },
+      "rules.0.filters.maxSnipes": 1,
+      "rules.0.filters.onMissingData": "reject",
+      "rules.0.filters.maxPoolTaxPct": 0,
+      "rules.0.fees": {
+        "slippagePct": 20,
+        "priorityFeeSol": "auto",
+        "tipSol": "auto",
+        "antiMev": true,
+        "retriesOnGraduation": 1
+      },
+      "rules.0.includeKeywords": {
+        "words": [],
+        "scanDepth": 0
+      },
+      "maxSignalAgeMs": 5000,
+      "safety.budgetMs": 150,
+      "safety.onUnknown": "reject",
+      "spend": {
+        "maxPerTradeSol": 0.1,
+        "maxPerHourSol": 0.5,
+        "maxTotalSol": 1
+      },
+      "execution.pumpBuilder": "local",
+      "execution.blockhashRefreshMs": 400,
+      "senders": [],
+      "rules.0.filters.maxMarketCapUsd": null,
+      "rules.0.filters.minTokenAgeSec": null,
+      "safety.maxRugcheckScore": null
+    }
+  }
+}

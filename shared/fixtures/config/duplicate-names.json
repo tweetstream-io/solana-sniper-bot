@@ -1,0 +1,28 @@
+{
+  "name": "duplicate-names",
+  "description": "Two rules with one name.",
+  "config": {
+    "rules": [
+      {
+        "name": "dup",
+        "mode": "ca_scanner",
+        "accounts": [
+          "1"
+        ]
+      },
+      {
+        "name": "dup",
+        "mode": "ca_scanner",
+        "accounts": [
+          "2"
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "error": {
+      "rule": "dup",
+      "field": "name"
+    }
+  }
+}

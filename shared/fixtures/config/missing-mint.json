@@ -1,0 +1,21 @@
+{
+  "name": "missing-mint",
+  "description": "A pfp_update rule without token.mint or useDetectedCa.",
+  "config": {
+    "rules": [
+      {
+        "name": "pfp",
+        "mode": "pfp_update",
+        "accounts": [
+          "44196397"
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "error": {
+      "rule": "pfp",
+      "field": "token.mint"
+    }
+  }
+}

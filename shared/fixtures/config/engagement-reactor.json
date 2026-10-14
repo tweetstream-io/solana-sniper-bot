@@ -1,0 +1,24 @@
+{
+  "name": "engagement-reactor",
+  "description": "An engagement rule without a reactor.",
+  "config": {
+    "rules": [
+      {
+        "name": "e",
+        "mode": "engagement",
+        "reactedTo": [
+          "@dev"
+        ],
+        "token": {
+          "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "error": {
+      "rule": "e",
+      "field": "reactor"
+    }
+  }
+}

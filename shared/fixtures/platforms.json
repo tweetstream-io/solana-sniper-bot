@@ -1,0 +1,115 @@
+{
+  "name": "platforms",
+  "description": "Authors are qualified by platform: a Truth Social account with the same id or handle as a watched X account does not fire X rules.",
+  "config": {
+    "rules": [
+      {
+        "name": "by-id",
+        "mode": "ca_scanner",
+        "accounts": [
+          "111"
+        ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      },
+      {
+        "name": "by-handle",
+        "mode": "ca_scanner",
+        "accounts": [
+          "@dev_one"
+        ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000001100,
+        "d": {
+          "tweetId": "tp-1",
+          "text": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+          "createdAt": 1772000001000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one",
+            "platform": "truth_social"
+          }
+        }
+      }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000002100,
+      "envelope": {
+        "v": 1,
+        "t": "tweet",
+        "op": "content",
+        "ts": 1772000002100,
+        "d": {
+          "tweetId": "2026541006844854272",
+          "text": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+          "createdAt": 1772000002000,
+          "kind": "post",
+          "author": {
+            "id": "111",
+            "handle": "@dev_one"
+          }
+        }
+      }
+    }
+  ],
+  "expectedSignals": [
+    {
+      "event": "tweet/content truth_social:tp-1",
+      "source": "text",
+      "chain": "solana",
+      "mint": "FmKEFyePJyGgEXUxoDHMX28Ky1XeUJcqFy5LNGB43DDA",
+      "confidence": "high",
+      "actor": {
+        "namespace": "truth_social",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    },
+    {
+      "event": "tweet/content twitter:2026541006844854272",
+      "source": "text",
+      "chain": "solana",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "confidence": "high",
+      "actor": {
+        "namespace": "x",
+        "id": "111",
+        "handle": "dev_one"
+      }
+    }
+  ],
+  "expectedDecisions": [
+    {
+      "event": "tweet/content twitter:2026541006844854272",
+      "rule": "by-id",
+      "decision": "fire",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "action": "buy",
+      "source": "text"
+    },
+    {
+      "event": "tweet/content twitter:2026541006844854272",
+      "rule": "by-handle",
+      "decision": "fire",
+      "mint": "H6oB2ziYZe3QqwHAyxhGLDWusSdktBY15gxoi8crru29",
+      "action": "buy",
+      "source": "text"
+    }
+  ]
+}

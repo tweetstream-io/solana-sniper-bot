@@ -1,6 +1,6 @@
 {
   "name": "callout",
-  "description": "pump.fun callouts: a new call fires, a high multiple and a missing caller position skip, other kinds are ignored, updates never buy, a caller exit sells, EVM tokens are not traded.",
+  "description": "pump.fun callouts: a new call fires, a high multiple and a missing caller position skip, other kinds are ignored, updates never buy, a caller exit sells only what that caller triggered, EVM tokens are not traded.",
   "config": {
     "rules": [
       {
@@ -25,7 +25,19 @@
   "positions": [
     {
       "mint": "HQ9q3MXSrS2GMofn3htuexLiVdiNXb9jHhAJfxRDnkv2",
-      "rule": "caller"
+      "rule": "caller",
+      "actor": {
+        "namespace": "pump_fun",
+        "handle": "CallerOne"
+      }
+    },
+    {
+      "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
+      "rule": "caller",
+      "actor": {
+        "namespace": "pump_fun",
+        "handle": "OtherCaller"
+      }
     }
   ],
   "events": [
@@ -226,6 +238,33 @@
         },
         "id": "c-6"
       }
+    },
+    {
+      "connection": "standard",
+      "receivedAtMs": 1772000001000,
+      "envelope": {
+        "v": 1,
+        "t": "account",
+        "op": "callout_update",
+        "ts": 1772000001000,
+        "d": {
+          "platform": "pump_fun",
+          "caller": {
+            "username": "CallerOne"
+          },
+          "kind": "callout",
+          "token": {
+            "address": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk"
+          },
+          "calloutId": "call-cu-3",
+          "createdAt": 1772000001000,
+          "position": {
+            "amountHeld": "0"
+          },
+          "updateOf": "c-0"
+        },
+        "id": "cu-3"
+      }
     }
   ],
   "expectedSignals": [
@@ -316,6 +355,17 @@
         "namespace": "pump_fun",
         "handle": "CallerOne"
       }
+    },
+    {
+      "event": "account/callout_update cu-3",
+      "source": "callout",
+      "chain": "solana",
+      "mint": "FZBj1rZ6SAwpPeLzcMjVNTZVXLr5NBYyeDthDSCAbBKk",
+      "confidence": "high",
+      "actor": {
+        "namespace": "pump_fun",
+        "handle": "CallerOne"
+      }
     }
   ],
   "expectedDecisions": [
@@ -371,6 +421,12 @@
       "rule": "caller",
       "decision": "skip",
       "code": "evm_not_supported"
+    },
+    {
+      "event": "account/callout_update cu-3",
+      "rule": "caller",
+      "decision": "skip",
+      "code": "update_not_new"
     }
   ]
 }

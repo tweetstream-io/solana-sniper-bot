@@ -1,0 +1,30 @@
+{
+  "name": "partial-override",
+  "description": "A partial filters block overrides only the fields it names.",
+  "config": {
+    "rules": [
+      {
+        "name": "r",
+        "mode": "ca_scanner",
+        "accounts": [
+          "44196397"
+        ],
+        "filters": {
+          "maxSnipes": 0
+        }
+      }
+    ],
+    "safety": {
+      "budgetMs": 80
+    }
+  },
+  "expected": {
+    "values": {
+      "rules.0.filters.maxSnipes": 0,
+      "rules.0.filters.cooldownSec": 0,
+      "rules.0.filters.skipIfAlreadyBought": true,
+      "safety.budgetMs": 80,
+      "safety.rugcheck": "off"
+    }
+  }
+}

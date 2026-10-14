@@ -1,0 +1,28 @@
+{
+  "name": "disabled-placeholder",
+  "description": "A disabled rule may keep placeholders.",
+  "config": {
+    "rules": [
+      {
+        "name": "on",
+        "mode": "ca_scanner",
+        "accounts": [
+          "44196397"
+        ]
+      },
+      {
+        "name": "off",
+        "enabled": false,
+        "mode": "pfp_update",
+        "accounts": [
+          "YOUR_ACCOUNT"
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "values": {
+      "rules.1.enabled": false
+    }
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "description": "Contract address extraction rules shared by both bots. See shared/README.md, section Detection and matching.",
+  "solana": {
+    "pattern": "[1-9A-HJ-NP-Za-km-z]{32,44}",
+    "decodedBytes": 32
+  },
+  "evm": {
+    "pattern": "0x[0-9a-fA-F]{40}",
+    "lowercase": true
+  },
+  "standalone": {
+    "wordChars": "[0-9A-Za-z]",
+    "rule": "A candidate counts only when the characters directly before and after it are not word characters."
+  },
+  "linkInText": {
+    "pattern": "(?:https?://)?(?:[a-z0-9-]+\\.)*(?:pump\\.fun|birdeye\\.so|jup\\.ag|dexscreener\\.com)/[^\\s)\\]}>\"']+",
+    "flags": "gi",
+    "stripTrailing": ".,;:!?"
+  },
+  "links": [
+    {
+      "via": "pump.fun",
+      "host": "(^|\\.)pump\\.fun$",
+      "path": "^/(?:coin/)?([1-9A-HJ-NP-Za-km-z]{32,44})/?$",
+      "confidence": "high"
+    },
+    {
+      "via": "birdeye",
+      "host": "(^|\\.)birdeye\\.so$",
+      "path": "^/(?:solana/)?token/([1-9A-HJ-NP-Za-km-z]{32,44})/?$",
+      "confidence": "high"
+    },
+    {
+      "via": "jupiter",
+      "host": "(^|\\.)jup\\.ag$",
+      "path": "^/(?:swap/)?[A-Za-z0-9]+-([1-9A-HJ-NP-Za-km-z]{32,44})/?$",
+      "confidence": "high"
+    },
+    {
+      "via": "dexscreener",
+      "host": "(^|\\.)dexscreener\\.com$",
+      "path": "^/solana/([1-9A-HJ-NP-Za-km-z]{32,44})/?$",
+      "confidence": "low"
+    }
+  ],
+  "denylist": [
+    {
+      "address": "So11111111111111111111111111111111111111112",
+      "name": "wrapped SOL mint"
+    },
+    {
+      "address": "11111111111111111111111111111111",
+      "name": "system program"
+    },
+    {
+      "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "name": "USDC"
+    },
+    {
+      "address": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+      "name": "USDT"
+    },
+    {
+      "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+      "name": "SPL Token program"
+    },
+    {
+      "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "name": "Token-2022 program"
+    },
+    {
+      "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+      "name": "associated token account program"
+    },
+    {
+      "address": "ComputeBudget111111111111111111111111111111",
+      "name": "compute budget program"
+    },
+    {
+      "address": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "name": "pump.fun program"
+    },
+    {
+      "address": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+      "name": "Jupiter aggregator program"
+    },
+    {
+      "address": "0x0000000000000000000000000000000000000000",
+      "name": "EVM zero address"
+    }
+  ]
+}
