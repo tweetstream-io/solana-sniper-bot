@@ -127,7 +127,7 @@ Sniping stays risky. Accounts get hijacked to post scam addresses, tokens get ru
 | Path | What it holds |
 | --- | --- |
 | `ts/` | the TypeScript bot, its tests, the demo feed, and the benchmark |
-| `rust/` | the Rust version. The repository holds TypeScript and Rust (Rust in progress). |
+| `rust/` | the Rust version: the same config, state files, and fixtures ([rust/README.md](rust/README.md)) |
 | `shared/` | the contract both bots follow: config schema, conformance fixtures, demo scenario ([shared/README.md](shared/README.md)) |
 | `docs/` | how it works, modes, config, latency, safety |
 | `config.example.json`, `.env.example` | starting points for your own `config.json` and `.env` |
