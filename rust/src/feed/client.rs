@@ -38,6 +38,9 @@ pub struct FeedOptions {
     pub url: String,
     /// `auth_ping` interval, which doubles as a liveness check.
     pub heartbeat: Duration,
+    /// Another connection carries the same events, so a refused key (401 or 403) only closes this
+    /// one. Set for the Ultra Speed connection when a standard key runs too.
+    pub optional: bool,
 }
 
 /// Called for every v1 envelope, on the task that read it.
@@ -60,7 +63,8 @@ pub fn backoff_ms(attempt: u32, random: f64) -> u64 {
     (base / 2.0 + random * (base / 2.0)).floor() as u64
 }
 
-/// Starts one connection that reconnects until aborted. A rejected key goes to `fatal`.
+/// Starts one connection that reconnects until aborted. A rejected key goes to `fatal`, except on
+/// an optional connection, where it is logged and ends only that connection.
 pub fn spawn_feed(options: FeedOptions, on_event: EventHandler, fatal: mpsc::UnboundedSender<String>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut attempt = 0u32;
@@ -79,6 +83,11 @@ pub fn spawn_feed(options: FeedOptions, on_event: EventHandler, fatal: mpsc::Unb
                     let status = response.status().as_u16();
                     log("refused", &format!("{}: handshake answered HTTP {status}", options.name));
                     match status {
+                        401 | 403 if options.optional => {
+                            let detail = format!("was refused ({status}); continuing on the other connection");
+                            log("refused", &format!("{} key {detail}", options.name));
+                            return;
+                        }
                         401 => {
                             let dashboard = product_link("/dashboard?tab=api", "rust-cli-key-rejected");
                             let _ = fatal.send(format!("{} API key rejected (401). Copy a current key from {dashboard}", options.name));

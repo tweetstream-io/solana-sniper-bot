@@ -51,6 +51,7 @@ struct RawLink {
 #[derive(Deserialize)]
 struct RawDenied {
     address: String,
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -81,7 +82,7 @@ struct Rules {
     link_in_text: Regex,
     strip_trailing: Vec<char>,
     links: Vec<Link>,
-    denylist: HashSet<String>,
+    denylist: HashMap<String, String>,
 }
 
 /// JavaScript flags become inline flags; `g` only means "find all", which `find_iter` does anyway.
@@ -100,9 +101,9 @@ static RULES: LazyLock<Rules> = LazyLock::new(|| {
     for link in raw.links {
         links.push(Link { via: link.via, host: compile(&link.host), path: compile(&link.path), confidence: link.confidence });
     }
-    let mut denylist = HashSet::new();
+    let mut denylist = HashMap::new();
     for denied in raw.denylist {
-        denylist.insert(denied.address);
+        denylist.insert(denied.address, denied.name);
     }
     Rules {
         solana_run: compile(&raw.solana.pattern),
@@ -138,14 +139,14 @@ pub fn classify_address(candidate: &str) -> Option<(Chain, String)> {
     if rules.solana_exact.is_match(candidate) {
         let mut bytes = [0u8; 64];
         let decoded = bs58::decode(candidate).onto(&mut bytes).ok()?;
-        if decoded != rules.decoded_bytes || rules.denylist.contains(candidate) {
+        if decoded != rules.decoded_bytes || rules.denylist.contains_key(candidate) {
             return None;
         }
         return Some((Chain::Solana, candidate.to_string()));
     }
     if rules.evm_exact.is_match(candidate) {
         let address = candidate.to_ascii_lowercase();
-        return if rules.denylist.contains(&address) { None } else { Some((Chain::Evm, address)) };
+        return if rules.denylist.contains_key(&address) { None } else { Some((Chain::Evm, address)) };
     }
     None
 }
@@ -164,6 +165,11 @@ pub fn is_solana_address(candidate: &str) -> bool {
         Some((Chain::Solana, _)) => true,
         Some((Chain::Evm, _)) | None => false,
     }
+}
+
+/// Returns what a denylisted address is (such as "wrapped SOL mint"), or `None` for any other.
+pub fn denylisted(candidate: &str) -> Option<&'static str> {
+    RULES.denylist.get(candidate).map(String::as_str)
 }
 
 /// A candidate glued to more letters or digits is a slice of something longer (a signature, a

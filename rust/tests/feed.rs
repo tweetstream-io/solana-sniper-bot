@@ -13,9 +13,11 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, 
 use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode};
 
 const GOOD_KEY: &str = "good-key";
+/// A valid key whose plan cannot stream.
+const NO_PLAN_KEY: &str = "no-plan-key";
 
-/// Selects `tweetstream.v1` for a request that offers the good key, answers 401 otherwise, and
-/// replies to `auth_ping` with `control/auth_pong`.
+/// Selects `tweetstream.v1` for a request that offers the good key, answers 403 for the key
+/// without a plan and 401 for any other, and replies to `auth_ping` with `control/auth_pong`.
 async fn feed_server() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/ws", listener.local_addr().unwrap());
@@ -26,6 +28,11 @@ async fn feed_server() -> String {
                 let check = |request: &Request, mut response: Response| -> Result<Response, ErrorResponse> {
                     let offered = request.headers().get("sec-websocket-protocol").and_then(|v| v.to_str().ok()).unwrap_or("");
                     let protocols: Vec<&str> = offered.split(',').map(str::trim).collect();
+                    if protocols.contains(&format!("tweetstream.auth.token.{NO_PLAN_KEY}").as_str()) {
+                        let mut refused = ErrorResponse::new(Some("no streaming plan".to_string()));
+                        *refused.status_mut() = StatusCode::FORBIDDEN;
+                        return Err(refused);
+                    }
                     if !protocols.contains(&"tweetstream.v1") || !protocols.contains(&format!("tweetstream.auth.token.{GOOD_KEY}").as_str())
                     {
                         let mut rejected = ErrorResponse::new(Some("unknown API key".to_string()));
@@ -53,7 +60,29 @@ async fn feed_server() -> String {
 }
 
 fn options(url: &str, key: &str) -> FeedOptions {
-    FeedOptions { name: "standard".to_string(), api_key: key.to_string(), url: url.to_string(), heartbeat: Duration::from_secs(30) }
+    FeedOptions {
+        name: "standard".to_string(),
+        api_key: key.to_string(),
+        url: url.to_string(),
+        heartbeat: Duration::from_secs(30),
+        optional: false,
+    }
+}
+
+#[tokio::test]
+async fn a_refused_ultra_key_closes_only_its_own_connection_and_a_refused_standard_key_stops_the_bot() {
+    let url = feed_server().await;
+    let (fatal, mut reasons) = mpsc::unbounded_channel();
+    for key in [NO_PLAN_KEY, "wrong-key"] {
+        let ultra = FeedOptions { name: "ultra".to_string(), optional: true, ..options(&url, key) };
+        let task = spawn_feed(ultra, Arc::new(|_, _| {}), fatal.clone());
+        tokio::time::timeout(Duration::from_secs(5), task).await.expect("the Ultra connection ends").unwrap();
+        assert!(reasons.try_recv().is_err(), "a refused Ultra key ({key}) does not stop the bot");
+    }
+    let task = spawn_feed(options(&url, NO_PLAN_KEY), Arc::new(|_, _| {}), fatal);
+    let reason = tokio::time::timeout(Duration::from_secs(5), reasons.recv()).await.unwrap().unwrap();
+    task.abort();
+    assert!(reason.contains("cannot stream (403)"), "{reason}");
 }
 
 #[tokio::test]

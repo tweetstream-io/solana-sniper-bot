@@ -11,7 +11,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::detect::addresses::is_solana_address;
+use crate::detect::addresses::{denylisted, is_solana_address};
 use crate::detect::types::{CalloutKind, Confidence, FollowOp, FomoOp, ProfileField, SignalSource};
 use crate::protocol::PostKind;
 use crate::rules::modes::keyword_pattern;
@@ -526,7 +526,10 @@ fn check_semantics(mut config: Config) -> Result<Config, ConfigError> {
         }
         for (field, mint) in mints {
             if !mint.is_empty() && !is_solana_address(mint) {
-                let message = format!("{place}: \"{mint}\" does not decode to a 32-byte Solana address.");
+                let message = match denylisted(mint) {
+                    Some(what) => format!("{place}: \"{mint}\" is the {what}, which the bot never trades. Use the token's own mint."),
+                    None => format!("{place}: \"{mint}\" does not decode to a 32-byte Solana address."),
+                };
                 return Err(ConfigError::new(message, Some(name), Some(&field)));
             }
         }

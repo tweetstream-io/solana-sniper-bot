@@ -526,22 +526,10 @@ fn payload_problem(payload: &Payload) -> Option<String> {
     }
 }
 
-/// The name of an event and the identities dedupe compares.
-#[derive(Debug, Clone, Default)]
-pub struct EventKeys {
-    /// `"<t>/<op> <key>"`, used in logs, the latency report, and `shared/fixtures`.
-    pub event_ref: String,
-    /// The payload's `eventId`.
-    pub event_id: Option<String>,
-    /// The post key of a `tweet/*` event.
-    pub post_key: Option<String>,
-    /// An id the payload type carries: `<calloutId>:<kind>:<replyId>`, a thesis id, a coin.
-    pub payload_id: Option<String>,
-}
-
-/// Returns the event reference and identities of a payload. Posts are named by post key; other
-/// events by `d.eventId`, else the envelope id, else an id from the payload.
-pub fn event_ref(pair: &str, envelope_id: Option<&str>, payload: &Payload) -> EventKeys {
+/// Returns the event's name, `"<t>/<op> <key>"`, used in logs, the latency report, and
+/// `shared/fixtures`. Posts are named by post key; other events by `d.eventId`, else the envelope
+/// id, else an id from the payload.
+pub fn event_ref(pair: &str, envelope_id: Option<&str>, payload: &Payload) -> String {
     let (event_id, post, payload_id) = match payload {
         Payload::Content(d) | Payload::Update(d) => (None, Some(post_key(&d.tweet_id, d.platform.as_deref(), d.author.as_ref())), None),
         Payload::Meta(d) => (None, Some(post_key(&d.tweet_id, d.platform.as_deref(), None)), None),
@@ -559,9 +547,6 @@ pub fn event_ref(pair: &str, envelope_id: Option<&str>, payload: &Payload) -> Ev
         Payload::Thesis(d) => (d.event_id.clone(), None, d.thesis.id.clone()),
         Payload::Verified(d) => (d.event_id.clone(), None, Some(d.coin.address.clone())),
     };
-    let name = match &post {
-        Some(key) => key.clone(),
-        None => event_id.clone().or(envelope_id.map(str::to_string)).or(payload_id.clone()).unwrap_or_default(),
-    };
-    EventKeys { event_ref: format!("{pair} {name}"), event_id, post_key: post, payload_id }
+    let name = post.or(event_id).or(envelope_id.map(str::to_string)).or(payload_id).unwrap_or_default();
+    format!("{pair} {name}")
 }

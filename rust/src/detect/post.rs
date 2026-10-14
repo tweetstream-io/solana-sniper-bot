@@ -9,7 +9,7 @@ use super::addresses::{FoundAddress, addresses_from_url, classify_address, find_
 use super::store::Post;
 use super::types::{Actor, Chain, Confidence, Namespace, PostActivity, PostTarget, Signal, SignalSource};
 
-const MAX_REF_DEPTH: usize = 4;
+const MAX_REF_DEPTH: usize = 7;
 
 /// Returns an account's effective platform: its own `platform`, else `fallback` (the event's or
 /// the outer account's effective platform).
@@ -57,7 +57,7 @@ impl SignalContext<'_> {
 }
 
 /// Returns the referenced posts by depth: level 1 is the direct reference, level 2 what that one
-/// references, at most four levels.
+/// references, at most seven levels (the most TweetStream sends).
 pub fn ref_levels(reference: Option<&Reference>) -> Vec<Vec<&Reference>> {
     let mut levels = Vec::new();
     let mut current: Vec<&Reference> = reference.into_iter().collect();

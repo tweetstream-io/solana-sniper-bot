@@ -1,44 +1,60 @@
 //! First copy wins across connections. With an Ultra Speed key and a standard key the same event
-//! can arrive twice; the second copy is dropped before detection. Next: `pipeline.rs` routes the
-//! event.
+//! arrives twice, with the same `d` and a different envelope `ts`; the second copy is dropped
+//! before detection. Next: `pipeline.rs` routes the event.
+//!
+//! An event is named by its `t/op` and a hash of its `d` with object keys sorted, so two copies
+//! match however their fields are ordered. Envelope ids cannot name an event: TweetStream sets the
+//! id of every `tweet/update` and `tweet/meta` to the post id, and later patches of one post must
+//! all get through.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 
-/// The identities an event can carry, strongest first.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct EventIds<'a> {
-    /// The envelope `id`.
-    pub envelope: Option<&'a str>,
-    /// The payload's `eventId`.
-    pub event: Option<&'a str>,
-    /// The post key of a `tweet/*` event.
-    pub post: Option<&'a str>,
-    /// An id the payload type carries, such as a thesis id or a callout id.
-    pub payload: Option<&'a str>,
+use serde_json::Value;
+use serde_json::value::RawValue;
+
+/// Returns the key two copies of one event share: `pair` (`t/op`) and the canonical hash of `d`.
+pub fn dedupe_key(pair: &str, d: Option<&RawValue>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    pair.hash(&mut hasher);
+    match d.map(|raw| serde_json::from_str::<Value>(raw.get())) {
+        Some(Ok(value)) => hash_value(&value, &mut hasher),
+        Some(Err(_)) => d.map(RawValue::get).hash(&mut hasher),
+        None => 0u8.hash(&mut hasher),
+    }
+    hasher.finish()
 }
 
-/// Returns the key two copies of one event share, or `None` when the event has no stable identity
-/// and must pass through.
-///
-/// `tweet/update` and `tweet/meta` can repeat for a post, so they are keyed by envelope id only.
-/// Other events use the payload's `eventId`, then the post key, then the envelope id, then an id
-/// the payload type carries.
-pub fn dedupe_key(pair: &str, ids: EventIds) -> Option<String> {
-    let EventIds { envelope, event, post, payload } = ids;
-    if pair == "tweet/update" || pair == "tweet/meta" {
-        return envelope.map(|id| format!("{pair} id:{id}"));
+fn hash_value(value: &Value, hasher: &mut DefaultHasher) {
+    match value {
+        Value::Null => 0u8.hash(hasher),
+        Value::Bool(b) => (1u8, b).hash(hasher),
+        Value::Number(n) => (2u8, n.to_string()).hash(hasher),
+        Value::String(s) => (3u8, s).hash(hasher),
+        Value::Array(items) => {
+            (4u8, items.len()).hash(hasher);
+            for item in items {
+                hash_value(item, hasher);
+            }
+        }
+        Value::Object(map) => {
+            (5u8, map.len()).hash(hasher);
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            for key in keys {
+                key.hash(hasher);
+                hash_value(&map[key], hasher);
+            }
+        }
     }
-    if let Some(id) = event.or(post) {
-        return Some(format!("{pair} {id}"));
-    }
-    envelope.or(payload).map(|id| format!("{pair} id:{id}"))
 }
 
 /// Remembers the keys of recent events, bounded and evicted oldest first.
 #[derive(Debug)]
 pub struct EventDedupe {
-    seen: HashSet<String>,
-    order: VecDeque<String>,
+    seen: HashSet<u64>,
+    order: VecDeque<u64>,
     capacity: usize,
 }
 
@@ -49,12 +65,9 @@ impl Default for EventDedupe {
 }
 
 impl EventDedupe {
-    /// Returns true for the first copy of a key, false for a repeat. `None` always passes.
-    pub fn first(&mut self, key: Option<String>) -> bool {
-        let Some(key) = key else {
-            return true;
-        };
-        if !self.seen.insert(key.clone()) {
+    /// Returns true for the first copy of a key, false for a repeat.
+    pub fn first(&mut self, key: u64) -> bool {
+        if !self.seen.insert(key) {
             return false;
         }
         self.order.push_back(key);

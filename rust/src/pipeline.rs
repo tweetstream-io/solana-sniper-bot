@@ -24,7 +24,7 @@ use crate::execute::trade::{ReleaseFire, Trader, TraderDeps};
 use crate::execute::trades::{ExitReason, PendingExit, TradeBook};
 use crate::exits::exits::ExitWatcher;
 use crate::feed::client::{FeedOptions, Receipt, spawn_feed};
-use crate::feed::dedupe::{EventDedupe, EventIds, dedupe_key};
+use crate::feed::dedupe::{EventDedupe, dedupe_key};
 use crate::land::land::{Lander, LanderOptions, SenderKind, SenderTarget, SignatureWatcher};
 use crate::log::{log, short, wire_name};
 use crate::network::Network;
@@ -127,16 +127,8 @@ impl Decider {
             Some(Err(error)) => return Outcome { event_ref: pair, malformed: Some(error), ..Outcome::default() },
             Some(Ok(payload)) => payload,
         };
-        let envelope_id = envelope.id.as_deref();
-        let keys = event_ref(&pair, envelope_id, &payload);
-        let ids = EventIds {
-            envelope: envelope_id,
-            event: keys.event_id.as_deref(),
-            post: keys.post_key.as_deref(),
-            payload: keys.payload_id.as_deref(),
-        };
-        let first = self.dedupe.first(dedupe_key(&pair, ids));
-        let mut outcome = Outcome { event_ref: keys.event_ref, ..Outcome::default() };
+        let first = self.dedupe.first(dedupe_key(&pair, envelope.d));
+        let mut outcome = Outcome { event_ref: event_ref(&pair, envelope.id.as_deref(), &payload), ..Outcome::default() };
         if !first {
             outcome.duplicate = true;
             return outcome;
@@ -349,8 +341,10 @@ pub async fn start_bot<N: Network>(options: BotOptions<N>) -> RunningBot {
         move |envelope: &Envelope, receipt: &Receipt| on_event(envelope, receipt, &decider, &trader, &report, &config)
     };
     let on_event = Arc::new(on_event);
+    let several = feeds.len() > 1;
     for (name, api_key) in feeds {
-        let options = FeedOptions { name, api_key, url: ws_url.clone(), heartbeat: Duration::from_secs(30) };
+        let optional = several && name == "ultra";
+        let options = FeedOptions { name, api_key, url: ws_url.clone(), heartbeat: Duration::from_secs(30), optional };
         tasks.push(spawn_feed(options, on_event.clone(), fatal.clone()));
     }
     RunningBot { report, book, tasks }
