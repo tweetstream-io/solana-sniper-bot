@@ -19,6 +19,7 @@
   <a href="#rule-modes">Modes</a> ·
   <a href="#go-faster-ultra-speed">Ultra Speed</a> ·
   <a href="docs/how-it-works.md">Docs</a> ·
+  <a href="https://tweetstream.io/blog/solana-sniper-bot?utm_source=github&utm_medium=referral&utm_campaign=solana-sniper-bot&utm_content=readme-nav">Guide</a> ·
   <a href="https://tweetstream.io/signup?offer=basic-monthly-trial&utm_source=github&utm_medium=referral&utm_campaign=solana-sniper-bot&utm_content=readme-nav">Start a trial</a>
 </p>
 
@@ -110,6 +111,8 @@ Start at `Decider.handle` in `ts/src/pipeline.ts`, then `Trader.buy` in `ts/src/
 | `fomo` | a FOMO user or coin you track gets a thesis, or the coin is first seen verified | `account/thesis`, `account/token_verified` |
 
 [docs/modes.md](docs/modes.md) has a minimal config for each, and [docs/config.md](docs/config.md) lists every field. X made likes private in 2024, so engagement means retweets, quotes, and replies.
+
+The [Solana sniper bot guide](https://tweetstream.io/blog/solana-sniper-bot?utm_source=github&utm_medium=referral&utm_campaign=solana-sniper-bot&utm_content=readme-modes) compares this bot with ready-made sniper bots such as Trojan and Photon, and walks through a live setup.
 
 ## Go faster: Ultra Speed
 
